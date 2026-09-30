@@ -158,12 +158,21 @@ final class CodexClient {
 
     private static String postForm(String url,String body) throws Exception {
         byte[] b=body.getBytes(StandardCharsets.UTF_8);
-        HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();
-        c.setRequestMethod("POST"); c.setDoOutput(true); c.setConnectTimeout(20000); c.setReadTimeout(20000);
-        c.setRequestProperty("Content-Type","application/x-www-form-urlencoded");
-        c.setRequestProperty("Accept","application/json"); c.setFixedLengthStreamingMode(b.length);
-        try(OutputStream os=c.getOutputStream()){os.write(b);}
-        return readResponse(c);
+        Exception last=null;
+        for(int attempt=1;attempt<=3;attempt++){
+            try{
+                HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();
+                c.setRequestMethod("POST"); c.setDoOutput(true); c.setConnectTimeout(20000); c.setReadTimeout(20000);
+                c.setRequestProperty("Content-Type","application/x-www-form-urlencoded");
+                c.setRequestProperty("Accept","application/json"); c.setFixedLengthStreamingMode(b.length);
+                try(OutputStream os=c.getOutputStream()){os.write(b);}
+                return readResponse(c);
+            }catch(UnknownHostException e){
+                last=e;
+                if(attempt<3) Thread.sleep(1500L*attempt);
+            }
+        }
+        throw new UnknownHostException("Android system DNS cannot resolve auth.openai.com after retries: "+(last==null?"unknown":last.getMessage()));
     }
 
     private static String readResponse(HttpURLConnection c) throws Exception {
