@@ -1,45 +1,33 @@
 package com.christorng.androidcodextools;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
 import java.util.UUID;
 
 final class ScheduleConfig {
-    static final String KEY_RULES="schedule_rules_v1";
-    static final String KEY_OVERRIDES="schedule_overrides_v1";
+    static final String KEY_WEEKLY="schedule_weekly_v2";
+    static final String KEY_DAY_OVERRIDES="schedule_day_overrides_v2";
 
     static final class Rule {
-        String id;
-        boolean enabled;
-        final boolean[] days=new boolean[7]; // Monday..Sunday
-        int hour;
-        int minute;
-
-        Rule(){
-            id=UUID.randomUUID().toString();
-            enabled=true;
-            hour=8;
-            minute=0;
-            for(int i=0;i<5;i++)days[i]=true;
-        }
+        String id=UUID.randomUUID().toString();
+        boolean enabled=true;
+        final boolean[] days={true,true,true,true,true,true,true};
+        int hour=9;
+        int minute=0;
+        int autoCount=0;
 
         Rule copy(){
             Rule r=new Rule();
@@ -48,139 +36,188 @@ final class ScheduleConfig {
             System.arraycopy(days,0,r.days,0,7);
             r.hour=hour;
             r.minute=minute;
+            r.autoCount=autoCount;
             return r;
         }
 
         String timeText(){
-            return String.format(java.util.Locale.US,"%02d:%02d",hour,minute);
+            return String.format(Locale.TAIWAN,"%02d:%02d",hour,minute);
         }
     }
 
-    static List<Rule> loadRules(Context c){
-        String raw=Scheduler.prefs(c).getString(KEY_RULES,"[]");
-        List<Rule> out=new ArrayList<>();
+    static final class DayOverride {
+        final LocalDate date;
+        boolean enabled=false; // false = use weekly default
+        final List<Rule> rules=new ArrayList<>();
+        DayOverride(LocalDate d){date=d;}
+    }
+
+    static final class Slot {
+        final long whenMs;
+        final int autoCount;
+        final String source;
+        Slot(long whenMs,int autoCount,String source){
+            this.whenMs=whenMs;
+            this.autoCount=autoCount;
+            this.source=source;
+        }
+    }
+
+    static List<Rule> loadWeekly(Context c){
+        String raw=Scheduler.prefs(c).getString(KEY_WEEKLY,null);
+        if(raw==null){
+            // Migrate old custom rules if they existed.
+            raw=Scheduler.prefs(c).getString("schedule_rules_v1","[]");
+        }
+        return parseRules(raw,true);
+    }
+
+    static void saveWeekly(Context c,List<Rule> rules){
+        Scheduler.prefs(c).edit().putString(KEY_WEEKLY,serializeRules(rules,true).toString()).apply();
+    }
+
+    static DayOverride loadOverride(Context c,LocalDate date){
+        DayOverride out=new DayOverride(date);
         try{
-            JSONArray a=new JSONArray(raw);
-            for(int i=0;i<a.length();i++){
-                JSONObject o=a.getJSONObject(i);
-                Rule r=new Rule();
-                r.id=o.optString("id",UUID.randomUUID().toString());
-                r.enabled=o.optBoolean("enabled",true);
-                String days=o.optString("days","1111100");
-                for(int d=0;d<7;d++)r.days[d]=d<days.length()&&days.charAt(d)=='1';
-                r.hour=o.optInt("hour",8);
-                r.minute=o.optInt("minute",0);
-                out.add(r);
-            }
+            JSONObject all=new JSONObject(Scheduler.prefs(c).getString(KEY_DAY_OVERRIDES,"{}"));
+            JSONObject o=all.optJSONObject(date.toString());
+            if(o==null)return out;
+            out.enabled=o.optBoolean("enabled",false);
+            JSONArray a=o.optJSONArray("rules");
+            if(a!=null)out.rules.addAll(parseRules(a.toString(),false));
         }catch(Exception ignored){}
         return out;
     }
 
-    static void saveRules(Context c,List<Rule> rules,String overrides) throws Exception{
-        validateOverrides(overrides);
-        JSONArray a=new JSONArray();
-        for(Rule r:rules){
+    static void saveOverride(Context c,DayOverride override){
+        try{
+            JSONObject all=new JSONObject(Scheduler.prefs(c).getString(KEY_DAY_OVERRIDES,"{}"));
             JSONObject o=new JSONObject();
-            o.put("id",r.id);
-            o.put("enabled",r.enabled);
-            StringBuilder ds=new StringBuilder();
-            for(boolean d:r.days)ds.append(d?'1':'0');
-            o.put("days",ds.toString());
-            o.put("hour",r.hour);
-            o.put("minute",r.minute);
-            a.put(o);
-        }
-        Scheduler.prefs(c).edit()
-                .putString(KEY_RULES,a.toString())
-                .putString(KEY_OVERRIDES,overrides==null?"":overrides.trim())
-                .apply();
+            o.put("enabled",override.enabled);
+            o.put("rules",serializeRules(override.rules,false));
+            all.put(override.date.toString(),o);
+
+            // Keep only today/tomorrow/future-nearby entries; old dates are irrelevant.
+            LocalDate today=LocalDate.now();
+            List<String> remove=new ArrayList<>();
+            java.util.Iterator<String> keys=all.keys();
+            while(keys.hasNext()){
+                String k=keys.next();
+                try{
+                    LocalDate d=LocalDate.parse(k);
+                    if(d.isBefore(today.minusDays(1))||d.isAfter(today.plusDays(7)))remove.add(k);
+                }catch(Exception e){remove.add(k);}
+            }
+            for(String k:remove)all.remove(k);
+            Scheduler.prefs(c).edit().putString(KEY_DAY_OVERRIDES,all.toString()).apply();
+        }catch(Exception ignored){}
     }
 
-    static String loadOverrides(Context c){
-        return Scheduler.prefs(c).getString(KEY_OVERRIDES,"");
+    static long nextAnchorMs(Context c,long afterMs){
+        Slot s=nextAnchor(c,afterMs);
+        return s==null?0:s.whenMs;
     }
 
-    static long nextCustomSlot(Context c,long afterMs){
-        List<Rule> rules=loadRules(c);
-        Map<LocalDate,List<LocalTime>> overrides=parseOverrides(loadOverrides(c));
+    static Slot nextAnchor(Context c,long afterMs){
         ZoneId zone=ZoneId.systemDefault();
         ZonedDateTime after=Instant.ofEpochMilli(afterMs).atZone(zone);
         LocalDate start=after.toLocalDate();
 
         for(int offset=0;offset<=370;offset++){
             LocalDate date=start.plusDays(offset);
-            List<LocalTime> times=new ArrayList<>();
-
-            if(overrides.containsKey(date)){
-                times.addAll(overrides.get(date));
-            }else{
-                int idx=date.getDayOfWeek().getValue()-1;
-                for(Rule r:rules){
-                    if(r.enabled && r.days[idx]){
-                        times.add(LocalTime.of(r.hour,r.minute));
-                    }
-                }
-            }
-
-            Collections.sort(times);
-            LocalTime previous=null;
-            for(LocalTime t:times){
-                if(previous!=null && previous.equals(t))continue;
-                previous=t;
-                ZonedDateTime candidate=date.atTime(t).atZone(zone);
-                if(candidate.toInstant().toEpochMilli()>afterMs){
-                    return candidate.toInstant().toEpochMilli();
+            List<Rule> rules=rulesForDate(c,date);
+            List<Rule> sorted=new ArrayList<>(rules);
+            sorted.sort(Comparator.comparingInt((Rule r)->r.hour).thenComparingInt(r->r.minute));
+            for(Rule r:sorted){
+                if(!r.enabled)continue;
+                ZonedDateTime z=date.atTime(LocalTime.of(r.hour,r.minute)).atZone(zone);
+                long when=z.toInstant().toEpochMilli();
+                if(when>afterMs){
+                    return new Slot(when,r.autoCount,date.equals(LocalDate.now())?"今天":
+                            date.equals(LocalDate.now().plusDays(1))?"明天":"每週");
                 }
             }
         }
-        return 0;
+        return null;
     }
 
-    static void validateOverrides(String raw) throws Exception{
-        parseOverridesStrict(raw==null?"":raw);
-    }
+    static List<Rule> rulesForDate(Context c,LocalDate date){
+        DayOverride ov=loadOverride(c,date);
+        if(ov.enabled)return copyList(ov.rules);
 
-    private static Map<LocalDate,List<LocalTime>> parseOverrides(String raw){
-        try{return parseOverridesStrict(raw==null?"":raw);}
-        catch(Exception e){return new LinkedHashMap<>();}
-    }
-
-    private static Map<LocalDate,List<LocalTime>> parseOverridesStrict(String raw) throws Exception{
-        Map<LocalDate,List<LocalTime>> out=new LinkedHashMap<>();
-        String[] lines=raw.split("\\r?\\n");
-        DateTimeFormatter tf=DateTimeFormatter.ofPattern("H:mm");
-        for(int i=0;i<lines.length;i++){
-            String line=lines[i].trim();
-            if(line.isEmpty()||line.startsWith("#"))continue;
-            String[] kv=line.split("=",2);
-            if(kv.length!=2)throw new IllegalArgumentException("特殊日期第 "+(i+1)+" 行格式錯誤");
-            LocalDate date;
-            try{date=LocalDate.parse(kv[0].trim());}
-            catch(DateTimeParseException e){throw new IllegalArgumentException("特殊日期第 "+(i+1)+" 行日期錯誤");}
-            String value=kv[1].trim();
-            List<LocalTime> times=new ArrayList<>();
-            if(!value.equalsIgnoreCase("off")&&!value.equalsIgnoreCase("skip")&&!value.equals("-")){
-                if(value.isEmpty())throw new IllegalArgumentException("特殊日期第 "+(i+1)+" 行未指定時間或 off");
-                for(String part:value.split(",")){
-                    try{times.add(LocalTime.parse(part.trim(),tf));}
-                    catch(Exception e){throw new IllegalArgumentException("特殊日期第 "+(i+1)+" 行時間錯誤: "+part.trim());}
-                }
-                times.sort(Comparator.naturalOrder());
-            }
-            out.put(date,times);
+        int day=date.getDayOfWeek().getValue()-1;
+        List<Rule> out=new ArrayList<>();
+        for(Rule r:loadWeekly(c)){
+            if(r.enabled&&r.days[day])out.add(r.copy());
         }
         return out;
     }
 
-    static String ruleSummary(Rule r){
+    static String estimateRule(Rule r){
+        StringBuilder b=new StringBuilder(r.timeText());
+        LocalTime t=LocalTime.of(r.hour,r.minute);
+        for(int i=1;i<=r.autoCount;i++){
+            t=t.plusHours(5);
+            b.append(" → ").append(String.format(Locale.TAIWAN,"%02d:%02d",t.getHour(),t.getMinute()));
+            if(t.getHour()<r.hour && i==1)b.append("(+1日)");
+        }
+        return b.toString();
+    }
+
+    static String weeklySummary(Rule r){
         String[] names={"一","二","三","四","五","六","日"};
-        StringBuilder b=new StringBuilder();
+        StringBuilder days=new StringBuilder();
         for(int i=0;i<7;i++){
             if(r.days[i]){
-                if(b.length()>0)b.append("、");
-                b.append(names[i]);
+                if(days.length()>0)days.append(" ");
+                days.append(names[i]);
             }
         }
-        return (b.length()==0?"未選日期":b.toString())+" "+r.timeText();
+        return (days.length()==0?"未選":days.toString())+"  "+estimateRule(r);
+    }
+
+    private static List<Rule> parseRules(String raw,boolean weekly){
+        List<Rule> out=new ArrayList<>();
+        try{
+            JSONArray a=new JSONArray(raw==null?"[]":raw);
+            for(int i=0;i<a.length();i++){
+                JSONObject o=a.getJSONObject(i);
+                Rule r=new Rule();
+                r.id=o.optString("id",UUID.randomUUID().toString());
+                r.enabled=o.optBoolean("enabled",true);
+                r.hour=o.optInt("hour",9);
+                r.minute=o.optInt("minute",0);
+                r.autoCount=Math.max(0,Math.min(8,o.optInt("autoCount",0)));
+                String ds=o.optString("days",weekly?"1111111":"1111111");
+                for(int d=0;d<7;d++)r.days[d]=d<ds.length()&&ds.charAt(d)=='1';
+                out.add(r);
+            }
+        }catch(Exception ignored){}
+        return out;
+    }
+
+    private static JSONArray serializeRules(List<Rule> rules,boolean weekly){
+        JSONArray a=new JSONArray();
+        for(Rule r:rules){
+            try{
+                JSONObject o=new JSONObject();
+                o.put("id",r.id);
+                o.put("enabled",r.enabled);
+                o.put("hour",r.hour);
+                o.put("minute",r.minute);
+                o.put("autoCount",r.autoCount);
+                StringBuilder ds=new StringBuilder();
+                for(boolean d:r.days)ds.append(d?'1':'0');
+                o.put("days",ds.toString());
+                a.put(o);
+            }catch(Exception ignored){}
+        }
+        return a;
+    }
+
+    private static List<Rule> copyList(List<Rule> rules){
+        List<Rule> out=new ArrayList<>();
+        for(Rule r:rules)out.add(r.copy());
+        return out;
     }
 }
