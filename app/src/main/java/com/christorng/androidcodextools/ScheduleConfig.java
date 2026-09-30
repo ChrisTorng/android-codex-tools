@@ -66,10 +66,28 @@ final class ScheduleConfig {
     static List<Rule> loadWeekly(Context c){
         String raw=Scheduler.prefs(c).getString(KEY_WEEKLY,null);
         if(raw==null){
-            // Migrate old custom rules if they existed.
-            raw=Scheduler.prefs(c).getString("schedule_rules_v1","[]");
+            String legacy=Scheduler.prefs(c).getString("schedule_rules_v1",null);
+            if(legacy!=null){
+                List<Rule> migrated=parseRules(legacy,true);
+                if(!migrated.isEmpty())return migrated;
+            }
+            return defaultDailyAnchors();
         }
         return parseRules(raw,true);
+    }
+
+    private static List<Rule> defaultDailyAnchors(){
+        List<Rule> out=new ArrayList<>();
+        int[] hours={9,13,18,23};
+        for(int h:hours){
+            Rule r=new Rule();
+            r.hour=h;
+            r.minute=0;
+            r.autoCount=0;
+            for(int i=0;i<7;i++)r.days[i]=true;
+            out.add(r);
+        }
+        return out;
     }
 
     static void saveWeekly(Context c,List<Rule> rules){
