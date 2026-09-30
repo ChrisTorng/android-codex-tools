@@ -85,11 +85,11 @@ public class MainActivity extends Activity {
                             throw new IllegalStateException("OAuth state/code mismatch");
                         new CodexClient(this).exchangeCode(q.get("code"),p.verifier,redirect);
                         Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login successful").apply();
-                        html="<html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><h2>Codex login successful</h2><p>You can return to the app.</p></body></html>";
+                        html="<html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head><body><h2>Codex login successful</h2><p>You can return to the app.</p></body></html>";
                     } catch(Exception loginError) {
                         String msg=String.valueOf(loginError.getMessage());
                         Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login ERROR: "+msg).apply();
-                        html="<html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><h2>Codex login failed</h2><pre style="white-space:pre-wrap;word-break:break-word">"+escape(msg)+"</pre><p>Return to the app and report this message.</p></body></html>";
+                        html="<html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head><body><h2>Codex login failed</h2><pre style='white-space:pre-wrap;word-break:break-word'>"+escape(msg)+"</pre><p>Return to the app and report this message.</p></body></html>";
                     }
                     byte[] body=html.getBytes(StandardCharsets.UTF_8);
                     os.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "+body.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
