@@ -23,12 +23,14 @@ import java.util.concurrent.TimeUnit;
 
 import okhttp3.Dns;
 import okhttp3.FormBody;
+import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import okhttp3.dnsoverhttps.DnsOverHttps;
 
 final class CodexClient {
     static final String CLIENT_ID="app_EMoamEEZ73f0CkXaXp7hrann";
@@ -228,6 +230,38 @@ final class CodexClient {
     }
 
     private static Dns buildDns(Context context){
+        OkHttpClient bootstrapClient=new OkHttpClient.Builder()
+                .connectTimeout(10,TimeUnit.SECONDS)
+                .readTimeout(10,TimeUnit.SECONDS)
+                .build();
+
+        Dns googleDoh=null;
+        Dns cloudflareDoh=null;
+        try{
+            googleDoh=new DnsOverHttps.Builder()
+                    .client(bootstrapClient)
+                    .url(HttpUrl.get("https://dns.google/dns-query"))
+                    .bootstrapDnsHosts(
+                            InetAddress.getByAddress(new byte[]{8,8,8,8}),
+                            InetAddress.getByAddress(new byte[]{8,8,4,4}))
+                    .includeIPv6(true)
+                    .build();
+        }catch(Exception ignored){}
+
+        try{
+            cloudflareDoh=new DnsOverHttps.Builder()
+                    .client(bootstrapClient)
+                    .url(HttpUrl.get("https://cloudflare-dns.com/dns-query"))
+                    .bootstrapDnsHosts(
+                            InetAddress.getByAddress(new byte[]{1,1,1,1}),
+                            InetAddress.getByAddress(new byte[]{1,0,0,1}))
+                    .includeIPv6(true)
+                    .build();
+        }catch(Exception ignored){}
+
+        final Dns finalGoogleDoh=googleDoh;
+        final Dns finalCloudflareDoh=cloudflareDoh;
+
         return hostname -> {
             Set<InetAddress> found=new LinkedHashSet<>();
             List<String> errors=new ArrayList<>();
@@ -264,6 +298,22 @@ final class CodexClient {
                 }
             }catch(Exception e){
                 errors.add("connectivity="+e.getClass().getSimpleName()+":"+e.getMessage());
+            }
+
+            if(found.isEmpty() && finalGoogleDoh!=null){
+                try{
+                    found.addAll(finalGoogleDoh.lookup(hostname));
+                }catch(Exception e){
+                    errors.add("googleDoH="+e.getClass().getSimpleName()+":"+e.getMessage());
+                }
+            }
+
+            if(found.isEmpty() && finalCloudflareDoh!=null){
+                try{
+                    found.addAll(finalCloudflareDoh.lookup(hostname));
+                }catch(Exception e){
+                    errors.add("cloudflareDoH="+e.getClass().getSimpleName()+":"+e.getMessage());
+                }
             }
 
             if(found.isEmpty()){
