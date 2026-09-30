@@ -1,6 +1,9 @@
 package com.christorng.androidcodextools;
 
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.util.Base64;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -10,6 +13,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Locale;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 final class CodexClient {
     static final String CLIENT_ID="app_EMoamEEZ73f0CkXaXp7hrann";
@@ -19,7 +24,8 @@ final class CodexClient {
     static final String RESPONSES_URL="https://chatgpt.com/backend-api/codex/responses";
     static final String SCOPE="openid profile email offline_access api.connectors.read api.connectors.invoke";
     private final SecureStore store;
-    CodexClient(Context c){ store=new SecureStore(c); }
+    private final Context context;
+    CodexClient(Context c){ context=c.getApplicationContext(); store=new SecureStore(context); }
 
     static final class Pkce {
         final String verifier,challenge,state;
@@ -156,23 +162,54 @@ final class CodexClient {
 
     private static Window window(JSONObject w){ return w==null?null:new Window(w.optDouble("used_percent",0),w.optLong("reset_at",0)); }
 
-    private static String postForm(String url,String body) throws Exception {
+    private String postForm(String url,String body) throws Exception {
         byte[] b=body.getBytes(StandardCharsets.UTF_8);
+        URL target=new URL(url);
         Exception last=null;
-        for(int attempt=1;attempt<=3;attempt++){
-            try{
-                HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();
-                c.setRequestMethod("POST"); c.setDoOutput(true); c.setConnectTimeout(20000); c.setReadTimeout(20000);
-                c.setRequestProperty("Content-Type","application/x-www-form-urlencoded");
-                c.setRequestProperty("Accept","application/json"); c.setFixedLengthStreamingMode(b.length);
-                try(OutputStream os=c.getOutputStream()){os.write(b);}
-                return readResponse(c);
-            }catch(UnknownHostException e){
-                last=e;
-                if(attempt<3) Thread.sleep(1500L*attempt);
+
+        ConnectivityManager cm=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        Set<Network> candidates=new LinkedHashSet<>();
+        if(cm!=null){
+            Network active=cm.getActiveNetwork();
+            if(active!=null)candidates.add(active);
+            for(Network n:cm.getAllNetworks()){
+                NetworkCapabilities caps=cm.getNetworkCapabilities(n);
+                if(caps!=null &&
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)){
+                    candidates.add(n);
+                }
             }
         }
-        throw new UnknownHostException("Android system DNS cannot resolve auth.openai.com after retries: "+(last==null?"unknown":last.getMessage()));
+
+        for(Network n:candidates){
+            try{
+                HttpURLConnection h=(HttpURLConnection)n.openConnection(target);
+                configureFormConnection(h,b);
+                try(OutputStream os=h.getOutputStream()){os.write(b);}
+                return readResponse(h);
+            }catch(UnknownHostException e){
+                last=e;
+            }
+        }
+
+        try{
+            HttpURLConnection h=(HttpURLConnection)target.openConnection();
+            configureFormConnection(h,b);
+            try(OutputStream os=h.getOutputStream()){os.write(b);}
+            return readResponse(h);
+        }catch(UnknownHostException e){
+            last=e;
+        }
+
+        throw new UnknownHostException("All Android networks failed to resolve/connect to auth.openai.com: "+
+                (last==null?"unknown":last.getMessage()));
+    }
+
+    private static void configureFormConnection(HttpURLConnection c,byte[] b) throws Exception {
+        c.setRequestMethod("POST"); c.setDoOutput(true); c.setConnectTimeout(20000); c.setReadTimeout(20000);
+        c.setRequestProperty("Content-Type","application/x-www-form-urlencoded");
+        c.setRequestProperty("Accept","application/json"); c.setFixedLengthStreamingMode(b.length);
     }
 
     private static String readResponse(HttpURLConnection c) throws Exception {
