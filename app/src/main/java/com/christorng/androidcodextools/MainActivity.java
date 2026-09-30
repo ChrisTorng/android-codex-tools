@@ -25,7 +25,7 @@ public class MainActivity extends Activity {
         status=new TextView(this); status.setTextIsSelectable(true); status.setPadding(0,pad,0,pad); root.addView(status);
         ntfy=new EditText(this); ntfy.setHint("ntfy topic URL"); ntfy.setSingleLine(true);
         ntfy.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
-        ntfy.setText(Scheduler.prefs(this).getString(Scheduler.KEY_NTFY,"")); root.addView(ntfy);
+        ntfy.setText(Scheduler.prefs(this).getString(Scheduler.KEY_NTFY,"https://ntfy.sh/codex-8b7a238e0815ab41ffe56082eb6a7b21")); root.addView(ntfy);
         root.addView(btn("Save ntfy URL",v->{Scheduler.prefs(this).edit().putString(Scheduler.KEY_NTFY,ntfy.getText().toString().trim()).apply();refreshUi();}));
         root.addView(btn("Sign in with ChatGPT",v->startLogin()));
         root.addView(btn("Check now",v->runAsync(false)));
