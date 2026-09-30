@@ -29,6 +29,7 @@ public class MainActivity extends Activity {
         root.addView(btn("Save ntfy URL",v->{Scheduler.prefs(this).edit().putString(Scheduler.KEY_NTFY,ntfy.getText().toString().trim()).apply();refreshUi();}));
         root.addView(btn("Sign in with ChatGPT",v->startLogin()));
         root.addView(btn("Check now",v->runAsync(false)));
+        root.addView(btn("Network diagnostics",v->runDiagnostics()));
         root.addView(btn("Trigger test (uses quota)",v->runAsync(true)));
         root.addView(btn("Enable scheduler",v->{Scheduler.setEnabled(this,true);if(!Scheduler.canExact(this))try{startActivity(Scheduler.exactSettings(this));}catch(Exception ignored){}runAsync(false);}));
         root.addView(btn("Disable scheduler",v->{Scheduler.setEnabled(this,false);refreshUi();}));
@@ -45,6 +46,15 @@ public class MainActivity extends Activity {
                 "\nScheduler: "+(Scheduler.enabled(this)?"enabled":"disabled")+
                 "\nExact alarm: "+(Scheduler.canExact(this)?"granted":"not granted")+
                 "\nNext alarm: "+Scheduler.formattedNext(this)+"\n\nLast status:\n"+Scheduler.last(this));
+    }
+
+    private void runDiagnostics(){
+        status.setText("Running network diagnostics...");
+        new Thread(()->{
+            String report=NetworkDiagnostics.run(getApplicationContext());
+            Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Network diagnostics\n"+report).apply();
+            runOnUiThread(this::refreshUi);
+        },"codex-netdiag").start();
     }
 
     private void runAsync(boolean force){
@@ -75,11 +85,11 @@ public class MainActivity extends Activity {
                             throw new IllegalStateException("OAuth state/code mismatch");
                         new CodexClient(this).exchangeCode(q.get("code"),p.verifier,redirect);
                         Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login successful").apply();
-                        html="<html><body><h2>Codex login successful</h2><p>You can return to the app.</p></body></html>";
+                        html="<html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><h2>Codex login successful</h2><p>You can return to the app.</p></body></html>";
                     } catch(Exception loginError) {
                         String msg=String.valueOf(loginError.getMessage());
                         Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login ERROR: "+msg).apply();
-                        html="<html><body><h2>Codex login failed</h2><pre>"+escape(msg)+"</pre><p>Return to the app and report this message.</p></body></html>";
+                        html="<html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><h2>Codex login failed</h2><pre style="white-space:pre-wrap;word-break:break-word">"+escape(msg)+"</pre><p>Return to the app and report this message.</p></body></html>";
                     }
                     byte[] body=html.getBytes(StandardCharsets.UTF_8);
                     os.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "+body.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
