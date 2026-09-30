@@ -5,16 +5,30 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.util.Base64;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
-import java.io.*;
-import java.net.*;
+
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.util.Locale;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+
+import okhttp3.Dns;
+import okhttp3.FormBody;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 
 final class CodexClient {
     static final String CLIENT_ID="app_EMoamEEZ73f0CkXaXp7hrann";
@@ -23,18 +37,32 @@ final class CodexClient {
     static final String USAGE_URL="https://chatgpt.com/backend-api/wham/usage";
     static final String RESPONSES_URL="https://chatgpt.com/backend-api/codex/responses";
     static final String SCOPE="openid profile email offline_access api.connectors.read api.connectors.invoke";
+
     private final SecureStore store;
     private final Context context;
-    CodexClient(Context c){ context=c.getApplicationContext(); store=new SecureStore(context); }
+    private final OkHttpClient http;
+
+    CodexClient(Context c){
+        context=c.getApplicationContext();
+        store=new SecureStore(context);
+        http=new OkHttpClient.Builder()
+                .dns(buildDns(context))
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(20, TimeUnit.SECONDS)
+                .build();
+    }
 
     static final class Pkce {
         final String verifier,challenge,state;
         Pkce(String v,String c,String s){verifier=v;challenge=c;state=s;}
     }
+
     static final class Window {
         final double usedPercent; final long resetAt;
         Window(double u,long r){usedPercent=u;resetAt=r;}
     }
+
     static final class Quota {
         final String plan; final boolean allowed,limitReached; final Window primary,secondary;
         Quota(String p,boolean a,boolean l,Window pr,Window se){plan=p;allowed=a;limitReached=l;primary=pr;secondary=se;}
@@ -64,9 +92,14 @@ final class CodexClient {
     }
 
     void exchangeCode(String code,String verifier,String redirect) throws Exception {
-        saveTokens(new JSONObject(postForm(TOKEN_URL,
-                "grant_type=authorization_code&client_id="+enc(CLIENT_ID)+"&code="+enc(code)+
-                        "&redirect_uri="+enc(redirect)+"&code_verifier="+enc(verifier))));
+        FormBody form=new FormBody.Builder()
+                .add("grant_type","authorization_code")
+                .add("client_id",CLIENT_ID)
+                .add("code",code)
+                .add("redirect_uri",redirect)
+                .add("code_verifier",verifier)
+                .build();
+        saveTokens(new JSONObject(postForm(TOKEN_URL,form)));
     }
 
     synchronized String validAccessToken() throws Exception {
@@ -82,15 +115,19 @@ final class CodexClient {
     synchronized void refresh() throws Exception {
         String r=store.get("refresh_token");
         if(r==null)throw new IllegalStateException("No refresh token; sign in again");
-        saveTokens(new JSONObject(postForm(TOKEN_URL,
-                "grant_type=refresh_token&client_id="+enc(CLIENT_ID)+"&refresh_token="+enc(r))));
+        FormBody form=new FormBody.Builder()
+                .add("grant_type","refresh_token")
+                .add("client_id",CLIENT_ID)
+                .add("refresh_token",r)
+                .build();
+        saveTokens(new JSONObject(postForm(TOKEN_URL,form)));
     }
 
     Quota getQuota() throws Exception {
-        HttpURLConnection c=(HttpURLConnection)new URL(USAGE_URL).openConnection();
-        c.setRequestMethod("GET"); c.setConnectTimeout(20000); c.setReadTimeout(20000);
-        auth(c);
-        JSONObject root=new JSONObject(readResponse(c));
+        Request request=authHeaders(new Request.Builder().url(USAGE_URL))
+                .get()
+                .build();
+        JSONObject root=new JSONObject(executeText(request));
         JSONObject rate=root.optJSONObject("rate_limit");
         return new Quota(root.optString("plan_type","unknown"),
                 rate==null||rate.optBoolean("allowed",true),
@@ -107,29 +144,29 @@ final class CodexClient {
         root.put("reasoning",new JSONObject().put("effort","none"));
         root.put("text",new JSONObject().put("verbosity","low"));
 
-        byte[] b=root.toString().getBytes(StandardCharsets.UTF_8);
-        HttpURLConnection c=(HttpURLConnection)new URL(RESPONSES_URL).openConnection();
-        c.setRequestMethod("POST"); c.setDoOutput(true); c.setConnectTimeout(20000); c.setReadTimeout(60000);
-        auth(c);
-        c.setRequestProperty("originator","codex-quota-trigger-android");
-        c.setRequestProperty("OpenAI-Beta","responses=experimental");
-        c.setRequestProperty("Accept","text/event-stream");
-        c.setRequestProperty("Content-Type","application/json");
-        c.setFixedLengthStreamingMode(b.length);
-        try(OutputStream os=c.getOutputStream()){os.write(b);}
-        int status=c.getResponseCode();
-        String response=readAll(status>=400?c.getErrorStream():c.getInputStream());
-        if(status<200||status>=300)throw new IllegalStateException("Trigger HTTP "+status+": "+response);
-        return status;
+        RequestBody body=RequestBody.create(root.toString(), MediaType.get("application/json; charset=utf-8"));
+        Request request=authHeaders(new Request.Builder().url(RESPONSES_URL))
+                .header("originator","codex-quota-trigger-android")
+                .header("OpenAI-Beta","responses=experimental")
+                .header("Accept","text/event-stream")
+                .post(body)
+                .build();
+
+        try(Response response=http.newCall(request).execute()){
+            String text=bodyText(response.body());
+            int status=response.code();
+            if(status<200||status>=300)throw new IllegalStateException("Trigger HTTP "+status+": "+text);
+            return status;
+        }
     }
 
     boolean signedIn(){ return store.get("refresh_token")!=null && store.get("account_id")!=null; }
     void signOut(){store.clear();}
 
-    private void auth(HttpURLConnection c) throws Exception {
-        c.setRequestProperty("Authorization","Bearer "+validAccessToken());
-        c.setRequestProperty("ChatGPT-Account-Id",store.get("account_id"));
-        c.setRequestProperty("User-Agent","android-codex-tools/0.1");
+    private Request.Builder authHeaders(Request.Builder b) throws Exception {
+        return b.header("Authorization","Bearer "+validAccessToken())
+                .header("ChatGPT-Account-Id",store.get("account_id"))
+                .header("User-Agent","android-codex-tools/0.1");
     }
 
     private void saveTokens(JSONObject j) throws Exception {
@@ -160,70 +197,83 @@ final class CodexClient {
         }catch(Exception e){return null;}
     }
 
-    private static Window window(JSONObject w){ return w==null?null:new Window(w.optDouble("used_percent",0),w.optLong("reset_at",0)); }
+    private static Window window(JSONObject w){
+        return w==null?null:new Window(w.optDouble("used_percent",0),w.optLong("reset_at",0));
+    }
 
-    private String postForm(String url,String body) throws Exception {
-        byte[] b=body.getBytes(StandardCharsets.UTF_8);
-        URL target=new URL(url);
-        Exception last=null;
+    private String postForm(String url,FormBody form) throws Exception {
+        Request request=new Request.Builder()
+                .url(url)
+                .header("Accept","application/json")
+                .header("User-Agent","android-codex-tools/0.1")
+                .post(form)
+                .build();
+        return executeText(request);
+    }
 
-        ConnectivityManager cm=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);
-        Set<Network> candidates=new LinkedHashSet<>();
-        if(cm!=null){
-            Network active=cm.getActiveNetwork();
-            if(active!=null)candidates.add(active);
-            for(Network n:cm.getAllNetworks()){
-                NetworkCapabilities caps=cm.getNetworkCapabilities(n);
-                if(caps!=null &&
-                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)){
-                    candidates.add(n);
-                }
+    private String executeText(Request request) throws Exception {
+        try(Response response=http.newCall(request).execute()){
+            String text=bodyText(response.body());
+            if(!response.isSuccessful()){
+                throw new IllegalStateException("HTTP "+response.code()+": "+text);
             }
-        }
-
-        for(Network n:candidates){
-            try{
-                HttpURLConnection h=(HttpURLConnection)n.openConnection(target);
-                configureFormConnection(h,b);
-                try(OutputStream os=h.getOutputStream()){os.write(b);}
-                return readResponse(h);
-            }catch(UnknownHostException e){
-                last=e;
-            }
-        }
-
-        try{
-            HttpURLConnection h=(HttpURLConnection)target.openConnection();
-            configureFormConnection(h,b);
-            try(OutputStream os=h.getOutputStream()){os.write(b);}
-            return readResponse(h);
+            return text;
         }catch(UnknownHostException e){
-            last=e;
+            throw new UnknownHostException("OkHttp DNS/connect failed for "+request.url().host()+": "+e.getMessage());
         }
-
-        throw new UnknownHostException("All Android networks failed to resolve/connect to auth.openai.com: "+
-                (last==null?"unknown":last.getMessage()));
     }
 
-    private static void configureFormConnection(HttpURLConnection c,byte[] b) throws Exception {
-        c.setRequestMethod("POST"); c.setDoOutput(true); c.setConnectTimeout(20000); c.setReadTimeout(20000);
-        c.setRequestProperty("Content-Type","application/x-www-form-urlencoded");
-        c.setRequestProperty("Accept","application/json"); c.setFixedLengthStreamingMode(b.length);
+    private static String bodyText(ResponseBody body) throws Exception {
+        return body==null?"":body.string();
     }
 
-    private static String readResponse(HttpURLConnection c) throws Exception {
-        int s=c.getResponseCode(); String t=readAll(s>=400?c.getErrorStream():c.getInputStream());
-        if(s<200||s>=300)throw new IllegalStateException("HTTP "+s+": "+t);
-        return t;
+    private static Dns buildDns(Context context){
+        return hostname -> {
+            Set<InetAddress> found=new LinkedHashSet<>();
+            List<String> errors=new ArrayList<>();
+
+            try{
+                InetAddress[] system=InetAddress.getAllByName(hostname);
+                for(InetAddress a:system)found.add(a);
+            }catch(Exception e){
+                errors.add("system="+e.getClass().getSimpleName()+":"+e.getMessage());
+            }
+
+            try{
+                ConnectivityManager cm=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);
+                if(cm!=null){
+                    Network active=cm.getActiveNetwork();
+                    if(active!=null){
+                        try{
+                            for(InetAddress a:active.getAllByName(hostname))found.add(a);
+                        }catch(Exception e){
+                            errors.add("active="+e.getClass().getSimpleName()+":"+e.getMessage());
+                        }
+                    }
+                    for(Network n:cm.getAllNetworks()){
+                        NetworkCapabilities caps=cm.getNetworkCapabilities(n);
+                        if(caps==null ||
+                                !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                                !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))continue;
+                        try{
+                            for(InetAddress a:n.getAllByName(hostname))found.add(a);
+                        }catch(Exception e){
+                            errors.add("network"+n+"="+e.getClass().getSimpleName()+":"+e.getMessage());
+                        }
+                    }
+                }
+            }catch(Exception e){
+                errors.add("connectivity="+e.getClass().getSimpleName()+":"+e.getMessage());
+            }
+
+            if(found.isEmpty()){
+                throw new UnknownHostException("No resolver returned addresses for "+hostname+"; "+String.join(" | ",errors));
+            }
+            return new ArrayList<>(found);
+        };
     }
-    private static String readAll(InputStream is) throws Exception {
-        if(is==null)return "";
-        StringBuilder sb=new StringBuilder();
-        try(BufferedReader br=new BufferedReader(new InputStreamReader(is,StandardCharsets.UTF_8))){
-            String l; while((l=br.readLine())!=null)sb.append(l).append('\n');
-        }
-        return sb.toString();
+
+    private static String enc(String s) throws Exception {
+        return java.net.URLEncoder.encode(s,"UTF-8");
     }
-    private static String enc(String s) throws Exception { return URLEncoder.encode(s,"UTF-8"); }
 }
