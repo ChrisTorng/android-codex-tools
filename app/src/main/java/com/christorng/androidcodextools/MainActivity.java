@@ -66,38 +66,80 @@ public class MainActivity extends Activity {
         status.setText("Starting OAuth...");
         new Thread(()->{
             try(ServerSocket server=new ServerSocket(0,1,InetAddress.getByName("127.0.0.1"))){
+                server.setSoTimeout(5*60_000);
                 String redirect="http://127.0.0.1:"+server.getLocalPort()+"/auth/callback";
                 CodexClient.Pkce p=CodexClient.newPkce();
                 String url=CodexClient.authorizeUrl(p,redirect);
-                runOnUiThread(()->{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(url)));status.setText("Waiting for browser callback...");});
+                runOnUiThread(()->{
+                    startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(url)));
+                    status.setText("Waiting for browser callback...");
+                });
+
+                String code;
                 try(Socket socket=server.accept()){
                     BufferedReader br=new BufferedReader(new InputStreamReader(socket.getInputStream(),StandardCharsets.UTF_8));
-                    String first=br.readLine(); if(first==null||!first.startsWith("GET "))throw new IllegalStateException("Invalid callback");
-                    String path=first.split(" ")[1]; String line; while((line=br.readLine())!=null&&!line.isEmpty()){}
-                    URI uri=new URI("http://127.0.0.1"+path); Map<String,String> q=parseQuery(uri.getRawQuery());
-                    OutputStream os=socket.getOutputStream();
-                    String html;
-                    try {
-                        if(q.get("error")!=null)throw new IllegalStateException("OAuth error: "+q.get("error"));
-                        String callbackState=q.get("state");
-                        String acceptedState=p.state+".onboarding_entrypoint=life_sciences";
-                        if(q.get("code")==null || !(p.state.equals(callbackState)||acceptedState.equals(callbackState)))
-                            throw new IllegalStateException("OAuth state/code mismatch");
-                        new CodexClient(this).exchangeCode(q.get("code"),p.verifier,redirect);
-                        Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login successful").apply();
-                        html="<html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head><body><h2>Codex login successful</h2><p>You can return to the app.</p></body></html>";
-                    } catch(Exception loginError) {
-                        String msg=String.valueOf(loginError.getMessage());
-                        Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login ERROR: "+msg).apply();
-                        html="<html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head><body><h2>Codex login failed</h2><pre style='white-space:pre-wrap;word-break:break-word'>"+escape(msg)+"</pre><p>Return to the app and report this message.</p></body></html>";
+                    String first=br.readLine();
+                    if(first==null||!first.startsWith("GET "))throw new IllegalStateException("Invalid callback");
+                    String path=first.split(" ")[1];
+                    String line; while((line=br.readLine())!=null&&!line.isEmpty()){}
+
+                    URI uri=new URI("http://127.0.0.1"+path);
+                    Map<String,String> q=parseQuery(uri.getRawQuery());
+
+                    if(q.get("error")!=null){
+                        String msg="OAuth error: "+q.get("error");
+                        writeHtml(socket,"<h2>Codex login failed</h2><pre>"+escape(msg)+"</pre>");
+                        throw new IllegalStateException(msg);
                     }
-                    byte[] body=html.getBytes(StandardCharsets.UTF_8);
-                    os.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "+body.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
-                    os.write(body); os.flush();
+
+                    String callbackState=q.get("state");
+                    String acceptedState=p.state+".onboarding_entrypoint=life_sciences";
+                    code=q.get("code");
+                    if(code==null || !(p.state.equals(callbackState)||acceptedState.equals(callbackState))){
+                        String msg="OAuth state/code mismatch";
+                        writeHtml(socket,"<h2>Codex login failed</h2><pre>"+escape(msg)+"</pre>");
+                        throw new IllegalStateException(msg);
+                    }
+
+                    // Important: acknowledge the browser immediately. Token exchange happens
+                    // after the localhost request is complete so a slow network cannot make
+                    // the browser report that 127.0.0.1 refused/timed out.
+                    writeHtml(socket,
+                            "<h2>Authorization received</h2>"+
+                            "<p>You can return to Android Codex Tools while it finishes signing in.</p>");
                 }
-            }catch(Exception e){Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login server ERROR: "+e.getMessage()).apply();}
+
+                Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Authorization received; exchanging token...").apply();
+                runOnUiThread(this::refreshUi);
+
+                try{
+                    new CodexClient(this).exchangeCode(code,p.verifier,redirect);
+                    Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login successful").apply();
+                }catch(Exception loginError){
+                    String msg=String.valueOf(loginError.getMessage());
+                    Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,
+                            "Login ERROR: "+loginError.getClass().getSimpleName()+": "+msg).apply();
+                }
+
+            }catch(Exception e){
+                Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,
+                        "Login server ERROR: "+e.getClass().getSimpleName()+": "+e.getMessage()).apply();
+            }
             runOnUiThread(this::refreshUi);
         },"codex-oauth").start();
+    }
+
+    private static void writeHtml(Socket socket,String bodyHtml) throws Exception{
+        String html="<html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"+
+                "<style>body{font-family:sans-serif;padding:24px;line-height:1.5}pre{white-space:pre-wrap;word-break:break-word}</style>"+
+                "</head><body>"+bodyHtml+"</body></html>";
+        byte[] body=html.getBytes(StandardCharsets.UTF_8);
+        OutputStream os=socket.getOutputStream();
+        os.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"+
+                "Content-Length: "+body.length+"\r\nConnection: close\r\n\r\n")
+                .getBytes(StandardCharsets.US_ASCII));
+        os.write(body);
+        os.flush();
     }
 
     private static String escape(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
