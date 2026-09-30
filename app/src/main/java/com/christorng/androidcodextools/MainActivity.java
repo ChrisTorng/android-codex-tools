@@ -11,10 +11,9 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
-import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
-import android.view.WindowInsets;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -22,7 +21,6 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
-import android.widget.ArrayAdapter;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.TimePicker;
@@ -38,6 +36,7 @@ import java.net.Socket;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -46,432 +45,516 @@ import java.util.Map;
 
 public class MainActivity extends Activity {
     private static final String DEFAULT_NTFY="https://ntfy.sh/codex-8b7a238e0815ab41ffe56082eb6a7b21";
+    private static final int ACCENT=Color.rgb(47,128,237);
 
-    private FrameLayout pageHost;
-    private View statusPage;
-    private View schedulePage;
-    private View settingsPage;
+    private View statusPage,schedulePage,settingsPage;
 
-    private TextView accountValue;
-    private TextView primaryValue;
-    private TextView weeklyValue;
-    private TextView scheduleValue;
-    private TextView lastValue;
+    private TextView accountLine;
+    private TextView primaryPercent,primaryMeta;
+    private TextView weeklyPercent,weeklyMeta;
+    private QuotaProgressView primaryBar,weeklyBar;
+    private TextView scheduleSummary,lastEvent;
 
     private Spinner modeSpinner;
-    private TextView nextScheduleValue;
-    private LinearLayout customSection;
-    private LinearLayout rulesContainer;
-    private EditText overridesEdit;
-    private final List<ScheduleConfig.Rule> draftRules=new ArrayList<>();
+    private TextView nextAlarmText,previewText,weeklySummary,todaySummary,tomorrowSummary;
 
-    private TextView settingsAccountValue;
-    private TextView exactAlarmValue;
+    private TextView settingsAccount,exactAlarmText,versionText;
     private EditText ntfyEdit;
-    private TextView versionValue;
 
-    @Override protected void onCreate(Bundle b){
-        super.onCreate(b);
+    @Override protected void onCreate(Bundle state){
+        super.onCreate(state);
         buildUi();
-        loadScheduleDraft();
-        refreshUi();
+        refreshAll();
     }
 
     @Override protected void onResume(){
         super.onResume();
-        refreshUi();
+        refreshAll();
     }
 
     private void buildUi(){
-        final int side=dp(16);
         LinearLayout shell=new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackgroundColor(Color.rgb(250,250,250));
+        shell.setBackgroundColor(Color.rgb(247,248,250));
         shell.setOnApplyWindowInsetsListener((v,insets)->{
             v.setPadding(0,insets.getSystemWindowInsetTop(),0,insets.getSystemWindowInsetBottom());
             return insets;
         });
 
+        LinearLayout header=new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(16),dp(10),dp(10),dp(6));
         TextView title=new TextView(this);
-        title.setText("Codex 配額排程");
-        title.setTextSize(25);
+        title.setText("Codex 配額");
+        title.setTextSize(23);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(Color.rgb(35,35,35));
-        title.setPadding(side,dp(14),side,dp(8));
-        shell.addView(title,new LinearLayout.LayoutParams(-1,-2));
+        title.setTextColor(Color.rgb(30,34,40));
+        header.addView(title,new LinearLayout.LayoutParams(0,dp(44),1));
+        Button refreshSmall=smallButton("↻");
+        refreshSmall.setContentDescription("更新配額");
+        refreshSmall.setOnClickListener(v->runCheck());
+        header.addView(refreshSmall,new LinearLayout.LayoutParams(dp(52),dp(42)));
+        shell.addView(header);
 
         LinearLayout tabs=new LinearLayout(this);
-        tabs.setOrientation(LinearLayout.HORIZONTAL);
-        tabs.setPadding(side,0,side,dp(8));
-        Button tabStatus=tabButton("狀態");
-        Button tabSchedule=tabButton("排程");
-        Button tabSettings=tabButton("設定");
-        tabs.addView(tabStatus,weight());
-        tabs.addView(tabSchedule,weight());
-        tabs.addView(tabSettings,weight());
-        shell.addView(tabs,new LinearLayout.LayoutParams(-1,-2));
+        tabs.setPadding(dp(12),0,dp(12),dp(6));
+        Button s=tabButton("狀態");
+        Button p=tabButton("排程");
+        Button g=tabButton("設定");
+        tabs.addView(s,weight(dp(44)));
+        tabs.addView(p,weight(dp(44)));
+        tabs.addView(g,weight(dp(44)));
+        shell.addView(tabs);
 
-        pageHost=new FrameLayout(this);
+        FrameLayout host=new FrameLayout(this);
         statusPage=buildStatusPage();
         schedulePage=buildSchedulePage();
         settingsPage=buildSettingsPage();
-        pageHost.addView(statusPage);
-        pageHost.addView(schedulePage);
-        pageHost.addView(settingsPage);
-        shell.addView(pageHost,new LinearLayout.LayoutParams(-1,0,1));
+        host.addView(statusPage);
+        host.addView(schedulePage);
+        host.addView(settingsPage);
+        shell.addView(host,new LinearLayout.LayoutParams(-1,0,1));
 
-        tabStatus.setOnClickListener(v->showPage(0));
-        tabSchedule.setOnClickListener(v->showPage(1));
-        tabSettings.setOnClickListener(v->showPage(2));
+        s.setOnClickListener(v->showPage(0));
+        p.setOnClickListener(v->showPage(1));
+        g.setOnClickListener(v->showPage(2));
         setContentView(shell);
         showPage(0);
     }
 
     private View buildStatusPage(){
-        LinearLayout content=pageContent();
+        LinearLayout root=new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(14),dp(4),dp(14),dp(8));
 
-        accountValue=valueText();
-        primaryValue=valueText();
-        weeklyValue=valueText();
-        scheduleValue=valueText();
-        lastValue=valueText();
-        lastValue.setMaxLines(4);
-        lastValue.setEllipsize(TextUtils.TruncateAt.END);
+        accountLine=new TextView(this);
+        accountLine.setTextSize(13);
+        accountLine.setTextColor(Color.rgb(95,100,110));
+        accountLine.setPadding(dp(2),0,0,dp(4));
+        root.addView(accountLine);
 
-        content.addView(card("帳號",accountValue));
-        content.addView(card("5 小時配額",primaryValue));
-        content.addView(card("週配額",weeklyValue));
-        content.addView(card("下一次排程",scheduleValue));
+        primaryPercent=new TextView(this);
+        primaryMeta=new TextView(this);
+        primaryBar=new QuotaProgressView(this);
+        root.addView(quotaCard("5 小時",primaryPercent,primaryBar,primaryMeta));
+
+        weeklyPercent=new TextView(this);
+        weeklyMeta=new TextView(this);
+        weeklyBar=new QuotaProgressView(this);
+        root.addView(quotaCard("週配額",weeklyPercent,weeklyBar,weeklyMeta));
+
+        scheduleSummary=valueText(15);
+        root.addView(compactCard("下一次排程",scheduleSummary));
 
         LinearLayout actions=new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        Button refresh=actionButton("更新配額");
+        Button check=actionButton("更新配額");
         Button trigger=actionButton("立即觸發");
-        actions.addView(refresh,weightWithMargin(false));
-        actions.addView(trigger,weightWithMargin(true));
-        content.addView(actions,new LinearLayout.LayoutParams(-1,-2));
-
-        content.addView(card("最近事件",lastValue));
-
-        refresh.setOnClickListener(v->runCheck());
+        actions.addView(check,half(false));
+        actions.addView(trigger,half(true));
+        root.addView(actions,new LinearLayout.LayoutParams(-1,dp(48)));
+        check.setOnClickListener(v->runCheck());
         trigger.setOnClickListener(v->confirmTrigger());
 
-        return scroll(content);
+        lastEvent=valueText(13);
+        lastEvent.setMaxLines(2);
+        root.addView(compactCard("最近事件",lastEvent));
+
+        return root;
     }
 
     private View buildSchedulePage(){
-        LinearLayout content=pageContent();
+        LinearLayout content=new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(14),dp(4),dp(14),dp(24));
 
-        TextView modeLabel=sectionTitle("排程模式");
-        content.addView(modeLabel);
-
+        content.addView(sectionTitle("模式"));
+        LinearLayout modeRow=new LinearLayout(this);
         modeSpinner=new Spinner(this);
-        String[] modes={"關閉","配額重置後自動觸發","自訂週排程"};
-        ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,modes);
-        modeSpinner.setAdapter(adapter);
-        content.addView(modeSpinner,new LinearLayout.LayoutParams(-1,dp(52)));
+        modeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"關閉","配額重置後自動觸發","錨點＋自動接續"}));
+        modeRow.addView(modeSpinner,new LinearLayout.LayoutParams(0,dp(50),1));
+        Button apply=smallButton("套用");
+        modeRow.addView(apply,new LinearLayout.LayoutParams(dp(84),dp(48)));
+        content.addView(modeRow);
+        apply.setOnClickListener(v->applyMode());
 
-        nextScheduleValue=valueText();
-        content.addView(card("目前下一次觸發",nextScheduleValue));
+        nextAlarmText=valueText(15);
+        content.addView(compactCard("實際下一個 Alarm",nextAlarmText));
 
-        customSection=new LinearLayout(this);
-        customSection.setOrientation(LinearLayout.VERTICAL);
+        previewText=valueText(14);
+        content.addView(compactCard("預估",previewText));
 
-        TextView help=bodyText(
-                "每一列可選星期與時間；可建立多列，所以同一天能有多個觸發時間。"+
-                "某天沒有任何規則就不會觸發。");
-        customSection.addView(help);
+        TextView note=bodyText("錨點到時若距 5h reset ≤ 60 秒，會等到 reset 後 15 秒再觸發；自動接續永遠依 backend 實際 reset 排下一次，不累積秒差。");
+        content.addView(note);
 
-        rulesContainer=new LinearLayout(this);
-        rulesContainer.setOrientation(LinearLayout.VERTICAL);
-        customSection.addView(rulesContainer,new LinearLayout.LayoutParams(-1,-2));
+        weeklySummary=valueText(14);
+        Button editWeekly=actionButton("編輯每週預設");
+        content.addView(summaryEditorCard("每週預設",weeklySummary,editWeekly));
+        editWeekly.setOnClickListener(v->editWeekly());
 
-        Button addRule=actionButton("＋ 新增時段");
-        customSection.addView(addRule,new LinearLayout.LayoutParams(-1,dp(50)));
-        addRule.setOnClickListener(v->{
-            draftRules.add(new ScheduleConfig.Rule());
-            renderRules();
-        });
+        todaySummary=valueText(14);
+        Button editToday=actionButton("編輯今天");
+        content.addView(summaryEditorCard("今天",todaySummary,editToday));
+        editToday.setOnClickListener(v->editOverride(LocalDate.now(),"今天"));
 
-        customSection.addView(sectionTitle("特殊日期／假日覆寫"));
-        TextView overrideHelp=bodyText(
-                "指定日期後，當天會完全取代每週規則。每行格式：\n"+
-                "2026-10-10=off\n"+
-                "2026-10-25=09:00,14:00\n"+
-                "可用 off 表示當天完全不觸發。");
-        customSection.addView(overrideHelp);
-
-        overridesEdit=new EditText(this);
-        overridesEdit.setMinLines(4);
-        overridesEdit.setGravity(Gravity.TOP|Gravity.START);
-        overridesEdit.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        overridesEdit.setHint("YYYY-MM-DD=off 或 YYYY-MM-DD=HH:mm,HH:mm");
-        customSection.addView(overridesEdit,new LinearLayout.LayoutParams(-1,-2));
-
-        content.addView(customSection,new LinearLayout.LayoutParams(-1,-2));
-
-        Button save=actionButton("儲存並套用排程");
-        LinearLayout.LayoutParams saveLp=new LinearLayout.LayoutParams(-1,dp(54));
-        saveLp.setMargins(0,dp(14),0,dp(12));
-        content.addView(save,saveLp);
-        save.setOnClickListener(v->saveSchedule());
-
-        modeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
-            @Override public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){
-                customSection.setVisibility(pos==2?View.VISIBLE:View.GONE);
-            }
-            @Override public void onNothingSelected(android.widget.AdapterView<?> p){}
-        });
+        tomorrowSummary=valueText(14);
+        Button editTomorrow=actionButton("編輯明天");
+        content.addView(summaryEditorCard("明天",tomorrowSummary,editTomorrow));
+        editTomorrow.setOnClickListener(v->editOverride(LocalDate.now().plusDays(1),"明天"));
 
         return scroll(content);
     }
 
     private View buildSettingsPage(){
-        LinearLayout content=pageContent();
+        LinearLayout root=new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(14),dp(4),dp(14),dp(8));
 
-        settingsAccountValue=valueText();
-        content.addView(card("ChatGPT 帳號",settingsAccountValue));
+        settingsAccount=valueText(15);
+        root.addView(compactCard("ChatGPT",settingsAccount));
 
-        Button login=actionButton("登入 ChatGPT");
-        content.addView(login,new LinearLayout.LayoutParams(-1,dp(52)));
-        login.setOnClickListener(v->startLogin());
-
+        LinearLayout authRow=new LinearLayout(this);
+        Button login=actionButton("登入");
         Button logout=actionButton("登出");
-        LinearLayout.LayoutParams logoutLp=new LinearLayout.LayoutParams(-1,dp(48));
-        logoutLp.setMargins(0,dp(8),0,dp(12));
-        content.addView(logout,logoutLp);
+        authRow.addView(login,half(false));
+        authRow.addView(logout,half(true));
+        root.addView(authRow,new LinearLayout.LayoutParams(-1,dp(46)));
+        login.setOnClickListener(v->startLogin());
         logout.setOnClickListener(v->{
             new CodexClient(this).signOut();
             Scheduler.setMode(this,Scheduler.MODE_OFF);
             Scheduler.note(this,"已登出；排程已關閉");
-            refreshUi();
+            refreshAll();
         });
 
-        content.addView(sectionTitle("ntfy 通知"));
+        TextView ntfyLabel=sectionTitle("ntfy");
+        ntfyLabel.setPadding(0,dp(8),0,0);
+        root.addView(ntfyLabel);
+        LinearLayout ntfyRow=new LinearLayout(this);
         ntfyEdit=new EditText(this);
         ntfyEdit.setSingleLine(true);
+        ntfyEdit.setTextSize(14);
         ntfyEdit.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
-        ntfyEdit.setHint("https://ntfy.sh/你的-topic");
-        content.addView(ntfyEdit,new LinearLayout.LayoutParams(-1,dp(54)));
-        Button saveNtfy=actionButton("儲存 ntfy URL");
-        content.addView(saveNtfy,new LinearLayout.LayoutParams(-1,dp(48)));
-        saveNtfy.setOnClickListener(v->{
+        Button save=smallButton("儲存");
+        ntfyRow.addView(ntfyEdit,new LinearLayout.LayoutParams(0,dp(48),1));
+        ntfyRow.addView(save,new LinearLayout.LayoutParams(dp(76),dp(46)));
+        root.addView(ntfyRow);
+        save.setOnClickListener(v->{
             Scheduler.prefs(this).edit().putString(Scheduler.KEY_NTFY,ntfyEdit.getText().toString().trim()).apply();
-            Toast.makeText(this,"已儲存",Toast.LENGTH_SHORT).show();
+            toast("已儲存");
         });
 
-        exactAlarmValue=valueText();
-        content.addView(card("Android 精準鬧鐘",exactAlarmValue));
-        Button exact=actionButton("開啟精準鬧鐘設定");
-        content.addView(exact,new LinearLayout.LayoutParams(-1,dp(50)));
+        exactAlarmText=valueText(14);
+        Button exact=actionButton("精準鬧鐘設定");
+        root.addView(summaryEditorCard("Android Alarm",exactAlarmText,exact));
         exact.setOnClickListener(v->{
             try{startActivity(Scheduler.exactSettings(this));}
-            catch(Exception e){Toast.makeText(this,"無法開啟系統設定",Toast.LENGTH_SHORT).show();}
+            catch(Exception e){toast("無法開啟系統設定");}
         });
 
-        TextView networkInfo=bodyText(
-                "連線策略：一般 Android DNS／目前網路解析失敗時，會自動使用 DoH fallback。"+
-                "這是目前登入在 Tailscale 開啟或關閉時都能工作的必要處理。");
-        content.addView(card("網路",networkInfo));
-
-        versionValue=valueText();
-        content.addView(card("版本",versionValue));
-
-        return scroll(content);
+        versionText=valueText(13);
+        root.addView(compactCard("版本 / 網路",versionText));
+        return root;
     }
 
-    private void showPage(int index){
-        statusPage.setVisibility(index==0?View.VISIBLE:View.GONE);
-        schedulePage.setVisibility(index==1?View.VISIBLE:View.GONE);
-        settingsPage.setVisibility(index==2?View.VISIBLE:View.GONE);
+    private void refreshAll(){
+        refreshStatus();
+        refreshSchedule();
+        refreshSettings();
     }
 
-    private void loadScheduleDraft(){
-        draftRules.clear();
-        for(ScheduleConfig.Rule r:ScheduleConfig.loadRules(this))draftRules.add(r.copy());
-        if(overridesEdit!=null)overridesEdit.setText(ScheduleConfig.loadOverrides(this));
+    private void refreshStatus(){
+        CodexClient client=new CodexClient(this);
+        Scheduler.Snapshot q=Scheduler.snapshot(this);
+        accountLine.setText(client.signedIn()
+                ?"ChatGPT 已登入 · "+q.plan+(q.lastCheckMs>0?" · 更新 "+Scheduler.formatTime(q.lastCheckMs):"")
+                :"ChatGPT 尚未登入");
 
-        String mode=Scheduler.mode(this);
-        int pos=Scheduler.MODE_AUTO.equals(mode)?1:Scheduler.MODE_CUSTOM.equals(mode)?2:0;
-        modeSpinner.setSelection(pos);
-        customSection.setVisibility(pos==2?View.VISIBLE:View.GONE);
-        renderRules();
-    }
-
-    private void renderRules(){
-        if(rulesContainer==null)return;
-        rulesContainer.removeAllViews();
-
-        if(draftRules.isEmpty()){
-            TextView empty=bodyText("尚未新增任何自訂時段。");
-            empty.setPadding(0,dp(10),0,dp(10));
-            rulesContainer.addView(empty);
-            return;
+        long now=System.currentTimeMillis();
+        if(q.primaryActive){
+            primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
+            double pace=pace(now,q.primaryResetMs,5*60*60_000L);
+            primaryBar.setProgress(q.primaryUsed,pace);
+            primaryMeta.setText(String.format(Locale.TAIWAN,
+                    "時間進度 %.0f%%  ·  reset %s",pace,Scheduler.formatTime(q.primaryResetMs)));
+        }else{
+            primaryPercent.setText("—");
+            primaryBar.setProgress(0,-1);
+            primaryMeta.setText("目前沒有 5 小時視窗");
         }
 
-        for(int index=0;index<draftRules.size();index++){
-            final ScheduleConfig.Rule rule=draftRules.get(index);
-            LinearLayout box=new LinearLayout(this);
-            box.setOrientation(LinearLayout.VERTICAL);
-            box.setPadding(dp(12),dp(10),dp(12),dp(10));
-            box.setBackground(roundRect(Color.WHITE,dp(14),Color.rgb(225,225,225)));
+        if(q.secondaryActive){
+            weeklyPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.secondaryUsed));
+            double pace=pace(now,q.secondaryResetMs,7*24*60*60_000L);
+            weeklyBar.setProgress(q.secondaryUsed,pace);
+            weeklyMeta.setText(String.format(Locale.TAIWAN,
+                    "時間進度 %.0f%%  ·  reset %s",pace,Scheduler.formatTime(q.secondaryResetMs)));
+        }else{
+            weeklyPercent.setText("—");
+            weeklyBar.setProgress(0,-1);
+            weeklyMeta.setText("目前沒有週配額資料");
+        }
 
-            LinearLayout top=new LinearLayout(this);
-            top.setOrientation(LinearLayout.HORIZONTAL);
-            top.setGravity(Gravity.CENTER_VERTICAL);
+        String mode=Scheduler.mode(this);
+        String modeName=Scheduler.MODE_AUTO.equals(mode)?"Reset 後自動":
+                Scheduler.MODE_CUSTOM.equals(mode)?"錨點＋接續":"已關閉";
+        scheduleSummary.setText(modeName+"\n"+Scheduler.formattedNext(this));
+        lastEvent.setText(Scheduler.last(this));
+    }
+
+    private void refreshSchedule(){
+        String mode=Scheduler.mode(this);
+        modeSpinner.setSelection(Scheduler.MODE_AUTO.equals(mode)?1:Scheduler.MODE_CUSTOM.equals(mode)?2:0);
+        nextAlarmText.setText(Scheduler.formattedNext(this));
+        previewText.setText(Scheduler.MODE_CUSTOM.equals(mode)?Scheduler.customPreview(this):
+                Scheduler.MODE_AUTO.equals(mode)?"下一次以目前 quota reset 為基準":"排程已關閉");
+
+        weeklySummary.setText(rulesSummary(ScheduleConfig.loadWeekly(this),true));
+
+        ScheduleConfig.DayOverride today=ScheduleConfig.loadOverride(this,LocalDate.now());
+        todaySummary.setText(overrideSummary(today,"使用每週預設"));
+        ScheduleConfig.DayOverride tomorrow=ScheduleConfig.loadOverride(this,LocalDate.now().plusDays(1));
+        tomorrowSummary.setText(overrideSummary(tomorrow,"使用每週預設"));
+    }
+
+    private void refreshSettings(){
+        boolean signed=new CodexClient(this).signedIn();
+        settingsAccount.setText(signed?"已登入":"尚未登入");
+        exactAlarmText.setText(Scheduler.canExact(this)?"已允許；Doze 下可使用 exact alarm":"尚未允許，排程可能延後");
+        if(ntfyEdit!=null&&!ntfyEdit.hasFocus()){
+            ntfyEdit.setText(Scheduler.prefs(this).getString(Scheduler.KEY_NTFY,DEFAULT_NTFY));
+        }
+        try{
+            PackageInfo p=getPackageManager().getPackageInfo(getPackageName(),0);
+            versionText.setText(p.versionName+"  ·  build "+p.getLongVersionCode()+
+                    "\nAndroid DNS 失敗時自動使用 DoH fallback；Tailscale 開／關皆可。");
+        }catch(Exception e){versionText.setText("—");}
+    }
+
+    private void applyMode(){
+        String mode=modeSpinner.getSelectedItemPosition()==1?Scheduler.MODE_AUTO:
+                modeSpinner.getSelectedItemPosition()==2?Scheduler.MODE_CUSTOM:Scheduler.MODE_OFF;
+        Scheduler.setMode(this,mode);
+        Scheduler.note(this,"排程模式已更新");
+        if(!Scheduler.MODE_OFF.equals(mode)&&!Scheduler.canExact(this)){
+            try{startActivity(Scheduler.exactSettings(this));}catch(Exception ignored){}
+        }
+        refreshAll();
+        toast("已套用");
+    }
+
+    private void editWeekly(){
+        List<ScheduleConfig.Rule> draft=copyRules(ScheduleConfig.loadWeekly(this));
+        showRuleEditor("每週預設",draft,true,null,()->{
+            ScheduleConfig.saveWeekly(this,draft);
+            if(Scheduler.MODE_CUSTOM.equals(Scheduler.mode(this)))Scheduler.reschedule(this);
+            refreshAll();
+        });
+    }
+
+    private void editOverride(LocalDate date,String label){
+        ScheduleConfig.DayOverride existing=ScheduleConfig.loadOverride(this,date);
+        ScheduleConfig.DayOverride draft=new ScheduleConfig.DayOverride(date);
+        draft.enabled=existing.enabled;
+        draft.rules.addAll(copyRules(existing.rules));
+
+        LinearLayout container=new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(dp(12),dp(4),dp(12),dp(8));
+
+        CheckBox override=new CheckBox(this);
+        override.setText("覆寫每週預設");
+        override.setChecked(draft.enabled);
+        container.addView(override);
+
+        TextView hint=bodyText("關閉覆寫＝照每週預設；開啟但不加任何時段＝當天完全不觸發。");
+        container.addView(hint);
+
+        LinearLayout list=new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        container.addView(list);
+
+        Button add=actionButton("＋ 新增錨點");
+        container.addView(add,new LinearLayout.LayoutParams(-1,dp(46)));
+
+        Runnable redraw=()->renderRuleRows(list,draft.rules,false,null);
+        redraw.run();
+        add.setOnClickListener(v->{
+            ScheduleConfig.Rule r=new ScheduleConfig.Rule();
+            r.hour=9;
+            r.minute=0;
+            draft.rules.add(r);
+            redraw.run();
+        });
+        override.setOnCheckedChangeListener((b,checked)->{
+            draft.enabled=checked;
+            list.setAlpha(checked?1f:0.4f);
+            add.setEnabled(checked);
+        });
+        list.setAlpha(draft.enabled?1f:0.4f);
+        add.setEnabled(draft.enabled);
+
+        ScrollView scroll=scroll(container);
+        new AlertDialog.Builder(this)
+                .setTitle(label+" · "+date)
+                .setView(scroll)
+                .setNegativeButton("取消",null)
+                .setPositiveButton("儲存",(d,w)->{
+                    draft.enabled=override.isChecked();
+                    ScheduleConfig.saveOverride(this,draft);
+                    if(Scheduler.MODE_CUSTOM.equals(Scheduler.mode(this)))Scheduler.reschedule(this);
+                    refreshAll();
+                })
+                .show();
+    }
+
+    private void showRuleEditor(String title,List<ScheduleConfig.Rule> draft,boolean weekly,
+                                Boolean overrideEnabled,Runnable onSave){
+        LinearLayout container=new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(dp(12),dp(4),dp(12),dp(8));
+        TextView hint=bodyText("每個錨點可設定「後續自動」次數；後續時間依每次實際 5h reset 決定，不會固定累加秒差。");
+        container.addView(hint);
+        LinearLayout list=new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        container.addView(list);
+        Button add=actionButton("＋ 新增錨點");
+        container.addView(add,new LinearLayout.LayoutParams(-1,dp(46)));
+        Runnable redraw=()->renderRuleRows(list,draft,weekly,null);
+        redraw.run();
+        add.setOnClickListener(v->{draft.add(new ScheduleConfig.Rule());redraw.run();});
+
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setView(scroll(container))
+                .setNegativeButton("取消",null)
+                .setPositiveButton("儲存",(d,w)->onSave.run())
+                .show();
+    }
+
+    private void renderRuleRows(LinearLayout list,List<ScheduleConfig.Rule> rules,boolean weekly,Runnable externalRedraw){
+        list.removeAllViews();
+        if(rules.isEmpty()){
+            TextView empty=bodyText("沒有錨點。");
+            list.addView(empty);
+            return;
+        }
+        for(ScheduleConfig.Rule rule:rules){
+            LinearLayout card=new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(dp(10),dp(8),dp(10),dp(8));
+            card.setBackground(roundRect(Color.WHITE,dp(12),Color.rgb(220,224,230)));
+
+            LinearLayout row=new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
 
             Switch enabled=new Switch(this);
             enabled.setText("啟用");
             enabled.setChecked(rule.enabled);
-            enabled.setOnCheckedChangeListener((b,checked)->rule.enabled=checked);
-            top.addView(enabled,new LinearLayout.LayoutParams(0,dp(48),1));
+            enabled.setOnCheckedChangeListener((b,v)->rule.enabled=v);
+            row.addView(enabled,new LinearLayout.LayoutParams(0,dp(46),1));
 
-            Button time=new Button(this);
-            time.setText(rule.timeText());
-            time.setOnClickListener(v->new TimePickerDialog(this,(TimePicker view,int h,int m)->{
-                rule.hour=h;
-                rule.minute=m;
-                time.setText(rule.timeText());
+            Button time=smallButton(rule.timeText());
+            time.setOnClickListener(v->new TimePickerDialog(this,(TimePicker p,int h,int m)->{
+                rule.hour=h;rule.minute=m;time.setText(rule.timeText());
             },rule.hour,rule.minute,true).show());
-            top.addView(time,new LinearLayout.LayoutParams(dp(100),dp(48)));
+            row.addView(time,new LinearLayout.LayoutParams(dp(92),dp(44)));
 
-            Button delete=new Button(this);
-            delete.setText("刪除");
-            delete.setOnClickListener(v->{
-                draftRules.remove(rule);
-                renderRules();
+            Spinner auto=new Spinner(this);
+            String[] counts={"不接續","+1","+2","+3","+4","+5","+6"};
+            auto.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,counts));
+            auto.setSelection(Math.min(rule.autoCount,6));
+            auto.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+                @Override public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){rule.autoCount=pos;}
+                @Override public void onNothingSelected(android.widget.AdapterView<?> p){}
             });
-            top.addView(delete,new LinearLayout.LayoutParams(dp(88),dp(48)));
-            box.addView(top);
+            row.addView(auto,new LinearLayout.LayoutParams(dp(88),dp(44)));
 
-            LinearLayout days=new LinearLayout(this);
-            days.setOrientation(LinearLayout.HORIZONTAL);
-            String[] names={"一","二","三","四","五","六","日"};
-            for(int d=0;d<7;d++){
-                final int day=d;
-                ToggleButton t=new ToggleButton(this);
-                t.setTextOn(names[d]);
-                t.setTextOff(names[d]);
-                t.setText(names[d]);
-                t.setTextSize(12);
-                t.setMinWidth(0);
-                t.setPadding(0,0,0,0);
-                t.setChecked(rule.days[d]);
-                t.setOnCheckedChangeListener((b,checked)->rule.days[day]=checked);
-                days.addView(t,new LinearLayout.LayoutParams(0,dp(44),1));
+            Button del=smallButton("×");
+            del.setOnClickListener(v->{rules.remove(rule);renderRuleRows(list,rules,weekly,externalRedraw);});
+            row.addView(del,new LinearLayout.LayoutParams(dp(46),dp(44)));
+            card.addView(row);
+
+            if(weekly){
+                LinearLayout days=new LinearLayout(this);
+                String[] names={"一","二","三","四","五","六","日"};
+                for(int i=0;i<7;i++){
+                    final int day=i;
+                    ToggleButton t=new ToggleButton(this);
+                    t.setTextOn(names[i]);
+                    t.setTextOff(names[i]);
+                    t.setText(names[i]);
+                    t.setTextSize(11);
+                    t.setMinWidth(0);
+                    t.setPadding(0,0,0,0);
+                    t.setChecked(rule.days[i]);
+                    t.setOnCheckedChangeListener((b,v)->rule.days[day]=v);
+                    days.addView(t,new LinearLayout.LayoutParams(0,dp(40),1));
+                }
+                card.addView(days);
             }
-            box.addView(days);
+
+            TextView estimate=bodyText("預估："+ScheduleConfig.estimateRule(rule));
+            estimate.setTextSize(12);
+            estimate.setPadding(0,dp(2),0,0);
+            card.addView(estimate);
 
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
-            lp.setMargins(0,dp(6),0,dp(6));
-            rulesContainer.addView(box,lp);
+            lp.setMargins(0,dp(4),0,dp(4));
+            list.addView(card,lp);
         }
     }
 
-    private void saveSchedule(){
-        try{
-            ScheduleConfig.saveRules(this,draftRules,overridesEdit.getText().toString());
-            String mode=modeSpinner.getSelectedItemPosition()==1?Scheduler.MODE_AUTO:
-                    modeSpinner.getSelectedItemPosition()==2?Scheduler.MODE_CUSTOM:Scheduler.MODE_OFF;
-            Scheduler.setMode(this,mode);
-            Scheduler.note(this,"排程設定已儲存");
-            if(!Scheduler.MODE_OFF.equals(mode)&&!Scheduler.canExact(this)){
-                try{startActivity(Scheduler.exactSettings(this));}
-                catch(Exception ignored){}
-            }
-            Toast.makeText(this,"排程已套用",Toast.LENGTH_SHORT).show();
-            refreshUi();
-        }catch(Exception e){
-            new AlertDialog.Builder(this)
-                    .setTitle("排程格式錯誤")
-                    .setMessage(e.getMessage())
-                    .setPositiveButton("確定",null)
-                    .show();
+    private String rulesSummary(List<ScheduleConfig.Rule> rules,boolean weekly){
+        if(rules.isEmpty())return "沒有錨點";
+        StringBuilder b=new StringBuilder();
+        int shown=0;
+        for(ScheduleConfig.Rule r:rules){
+            if(!r.enabled)continue;
+            if(shown++>0)b.append("\n");
+            b.append(weekly?ScheduleConfig.weeklySummary(r):ScheduleConfig.estimateRule(r));
+            if(shown>=5&&rules.size()>5){b.append("\n…");break;}
         }
+        return b.length()==0?"沒有啟用的錨點":b.toString();
     }
 
-    private void refreshUi(){
-        CodexClient client=new CodexClient(this);
-        Scheduler.Snapshot q=Scheduler.snapshot(this);
-        boolean signed=client.signedIn();
+    private String overrideSummary(ScheduleConfig.DayOverride o,String defaultText){
+        if(!o.enabled)return defaultText;
+        if(o.rules.isEmpty())return "覆寫：當天不觸發";
+        return "覆寫\n"+rulesSummary(o.rules,false);
+    }
 
-        accountValue.setText(signed?"已登入 · "+q.plan:"尚未登入");
-        settingsAccountValue.setText(signed?"已登入":"尚未登入");
-
-        if(q.lastCheckMs<=0){
-            primaryValue.setText("尚未取得配額資料");
-            weeklyValue.setText("尚未取得配額資料");
-        }else{
-            if(q.primaryActive){
-                double remaining=Math.max(0,100-q.primaryUsed);
-                primaryValue.setText(String.format(Locale.TAIWAN,
-                        "已使用 %.0f%% · 剩餘 %.0f%%\n重置：%s",
-                        q.primaryUsed,remaining,Scheduler.formatTime(q.primaryResetMs)));
-            }else{
-                primaryValue.setText("目前沒有 5 小時視窗");
-            }
-
-            if(q.secondaryActive){
-                double remaining=Math.max(0,100-q.secondaryUsed);
-                weeklyValue.setText(String.format(Locale.TAIWAN,
-                        "已使用 %.0f%% · 剩餘 %.0f%%\n重置：%s",
-                        q.secondaryUsed,remaining,Scheduler.formatTime(q.secondaryResetMs)));
-            }else{
-                weeklyValue.setText("目前沒有週配額資料");
-            }
-        }
-
-        String modeName=Scheduler.MODE_AUTO.equals(Scheduler.mode(this))?"配額重置後自動觸發":
-                Scheduler.MODE_CUSTOM.equals(Scheduler.mode(this))?"自訂週排程":"已關閉";
-        scheduleValue.setText(modeName+"\n"+Scheduler.formattedNext(this));
-        nextScheduleValue.setText(Scheduler.formattedNext(this));
-        lastValue.setText(Scheduler.last(this));
-
-        exactAlarmValue.setText(Scheduler.canExact(this)?
-                "已允許精準鬧鐘；可在 Doze 狀態準時喚醒 App。":
-                "尚未允許精準鬧鐘；排程時間可能不精準。");
-
-        if(ntfyEdit!=null && !ntfyEdit.hasFocus()){
-            ntfyEdit.setText(Scheduler.prefs(this).getString(Scheduler.KEY_NTFY,DEFAULT_NTFY));
-        }
-
-        if(versionValue!=null){
-            try{
-                PackageInfo p=getPackageManager().getPackageInfo(getPackageName(),0);
-                versionValue.setText(p.versionName+" · versionCode "+p.getLongVersionCode());
-            }catch(Exception e){versionValue.setText("—");}
-        }
+    private List<ScheduleConfig.Rule> copyRules(List<ScheduleConfig.Rule> src){
+        List<ScheduleConfig.Rule> out=new ArrayList<>();
+        for(ScheduleConfig.Rule r:src)out.add(r.copy());
+        return out;
     }
 
     private void runCheck(){
-        Toast.makeText(this,"正在更新配額…",Toast.LENGTH_SHORT).show();
+        toast("正在更新…");
         new Thread(()->{
             Scheduler.checkNow(getApplicationContext());
-            runOnUiThread(this::refreshUi);
+            runOnUiThread(this::refreshAll);
         },"codex-check").start();
     }
 
     private void confirmTrigger(){
         new AlertDialog.Builder(this)
-                .setTitle("立即觸發 Codex？")
-                .setMessage("這會送出一個最小 Codex request，會消耗配額；若目前沒有 5 小時視窗，通常會建立新的視窗。")
+                .setTitle("立即觸發？")
+                .setMessage("會送出最小 Codex request 並消耗配額。")
                 .setNegativeButton("取消",null)
-                .setPositiveButton("觸發",(d,w)->runManualTrigger())
-                .show();
-    }
-
-    private void runManualTrigger(){
-        Toast.makeText(this,"正在觸發…",Toast.LENGTH_SHORT).show();
-        new Thread(()->{
-            Scheduler.manualTrigger(getApplicationContext());
-            runOnUiThread(this::refreshUi);
-        },"codex-trigger").start();
+                .setPositiveButton("觸發",(d,w)->{
+                    toast("正在觸發…");
+                    new Thread(()->{
+                        Scheduler.manualTrigger(getApplicationContext());
+                        runOnUiThread(this::refreshAll);
+                    },"codex-trigger").start();
+                }).show();
     }
 
     private void startLogin(){
         Scheduler.note(this,"等待瀏覽器登入…");
-        refreshUi();
-
+        refreshAll();
         new Thread(()->{
             try(ServerSocket server=new ServerSocket(0,1,InetAddress.getByName("127.0.0.1"))){
                 server.setSoTimeout(5*60_000);
@@ -486,137 +569,172 @@ public class MainActivity extends Activity {
                     String first=br.readLine();
                     if(first==null||!first.startsWith("GET "))throw new IllegalStateException("Invalid callback");
                     String path=first.split(" ")[1];
-                    String line;
-                    while((line=br.readLine())!=null&&!line.isEmpty()){}
-
+                    String line;while((line=br.readLine())!=null&&!line.isEmpty()){}
                     URI uri=new URI("http://127.0.0.1"+path);
-                    Map<String,String> query=parseQuery(uri.getRawQuery());
-                    if(query.get("error")!=null){
-                        String msg="OAuth error: "+query.get("error");
-                        writeHtml(socket,"<h2>Codex login failed</h2><pre>"+escape(msg)+"</pre>");
-                        throw new IllegalStateException(msg);
-                    }
-
-                    String callbackState=query.get("state");
-                    String acceptedState=p.state+".onboarding_entrypoint=life_sciences";
-                    code=query.get("code");
-                    if(code==null||!(p.state.equals(callbackState)||acceptedState.equals(callbackState))){
-                        String msg="OAuth state/code mismatch";
-                        writeHtml(socket,"<h2>Codex login failed</h2><pre>"+escape(msg)+"</pre>");
-                        throw new IllegalStateException(msg);
-                    }
-
-                    writeHtml(socket,
-                            "<h2>Authorization received</h2>"+
-                            "<p>You can return to Android Codex Tools while it finishes signing in.</p>");
+                    Map<String,String> q=parseQuery(uri.getRawQuery());
+                    if(q.get("error")!=null)throw new IllegalStateException("OAuth error: "+q.get("error"));
+                    String state=q.get("state");
+                    code=q.get("code");
+                    if(code==null||!(p.state.equals(state)||(p.state+".onboarding_entrypoint=life_sciences").equals(state)))
+                        throw new IllegalStateException("OAuth state/code mismatch");
+                    writeHtml(socket,"<h2>Authorization received</h2><p>可以回到 Android Codex Tools。</p>");
                 }
 
                 Scheduler.note(this,"已收到授權，正在取得 token…");
-                runOnUiThread(this::refreshUi);
-
-                try{
-                    new CodexClient(this).exchangeCode(code,p.verifier,redirect);
-                    Scheduler.note(this,"登入成功");
-                    Scheduler.checkNow(getApplicationContext());
-                }catch(Exception loginError){
-                    Scheduler.note(this,"登入失敗: "+loginError.getClass().getSimpleName()+": "+loginError.getMessage());
-                }
+                runOnUiThread(this::refreshAll);
+                new CodexClient(this).exchangeCode(code,p.verifier,redirect);
+                Scheduler.note(this,"登入成功");
+                Scheduler.checkNow(getApplicationContext());
             }catch(Exception e){
-                Scheduler.note(this,"登入流程失敗: "+e.getClass().getSimpleName()+": "+e.getMessage());
+                Scheduler.note(this,"登入失敗: "+e.getClass().getSimpleName()+": "+e.getMessage());
             }
-            runOnUiThread(this::refreshUi);
+            runOnUiThread(this::refreshAll);
         },"codex-oauth").start();
     }
 
-    private LinearLayout pageContent(){
-        LinearLayout c=new LinearLayout(this);
-        c.setOrientation(LinearLayout.VERTICAL);
-        c.setPadding(dp(16),dp(8),dp(16),dp(28));
-        return c;
+    private double pace(long now,long reset,long duration){
+        long start=reset-duration;
+        if(reset<=0||duration<=0)return -1;
+        return Math.max(0,Math.min(100,(now-start)*100.0/duration));
     }
 
-    private ScrollView scroll(View child){
-        ScrollView s=new ScrollView(this);
-        s.setFillViewport(true);
-        s.setClipToPadding(false);
-        s.addView(child,new ScrollView.LayoutParams(-1,-2));
-        return s;
-    }
-
-    private View card(String title,TextView value){
+    private View quotaCard(String title,TextView percent,QuotaProgressView bar,TextView meta){
         LinearLayout box=new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(14),dp(12),dp(14),dp(12));
-        box.setBackground(roundRect(Color.WHITE,dp(16),Color.rgb(228,228,228)));
+        box.setPadding(dp(12),dp(8),dp(12),dp(8));
+        box.setBackground(roundRect(Color.WHITE,dp(14),Color.rgb(224,227,232)));
 
-        TextView t=new TextView(this);
-        t.setText(title);
-        t.setTextSize(13);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setTextColor(Color.rgb(95,95,95));
-        box.addView(t);
+        LinearLayout top=new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView label=sectionLabel(title);
+        top.addView(label,new LinearLayout.LayoutParams(0,dp(28),1));
+        percent.setTextSize(22);
+        percent.setTypeface(Typeface.DEFAULT_BOLD);
+        percent.setTextColor(Color.rgb(35,38,44));
+        top.addView(percent,new LinearLayout.LayoutParams(-2,dp(30)));
+        box.addView(top);
 
-        value.setPadding(0,dp(4),0,0);
-        box.addView(value,new LinearLayout.LayoutParams(-1,-2));
+        box.addView(bar,new LinearLayout.LayoutParams(-1,dp(13)));
 
-        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
-        lp.setMargins(0,dp(6),0,dp(6));
+        meta.setTextSize(12);
+        meta.setTextColor(Color.rgb(95,100,110));
+        meta.setPadding(0,dp(4),0,0);
+        box.addView(meta,new LinearLayout.LayoutParams(-1,dp(34)));
+
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(88));
+        lp.setMargins(0,dp(3),0,dp(3));
         box.setLayoutParams(lp);
         return box;
     }
 
-    private TextView valueText(){
-        TextView t=new TextView(this);
-        t.setTextSize(18);
-        t.setTextColor(Color.rgb(35,35,35));
-        t.setTextIsSelectable(true);
-        t.setLineSpacing(0,1.08f);
-        return t;
+    private View compactCard(String title,TextView value){
+        LinearLayout box=new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(11),dp(6),dp(11),dp(6));
+        box.setBackground(roundRect(Color.WHITE,dp(13),Color.rgb(224,227,232)));
+        box.addView(sectionLabel(title));
+        box.addView(value);
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
+        lp.setMargins(0,dp(3),0,dp(3));
+        box.setLayoutParams(lp);
+        return box;
     }
 
-    private TextView bodyText(String text){
+    private View summaryEditorCard(String title,TextView summary,Button edit){
+        LinearLayout box=new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(11),dp(8),dp(11),dp(8));
+        box.setBackground(roundRect(Color.WHITE,dp(13),Color.rgb(224,227,232)));
+
+        LinearLayout top=new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(sectionLabel(title),new LinearLayout.LayoutParams(0,dp(30),1));
+        edit.setText("編輯");
+        top.addView(edit,new LinearLayout.LayoutParams(dp(72),dp(40)));
+        box.addView(top);
+        summary.setPadding(0,dp(2),0,0);
+        box.addView(summary);
+
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
+        lp.setMargins(0,dp(4),0,dp(4));
+        box.setLayoutParams(lp);
+        return box;
+    }
+
+    private TextView sectionLabel(String text){
         TextView t=new TextView(this);
         t.setText(text);
-        t.setTextSize(15);
-        t.setTextColor(Color.rgb(75,75,75));
-        t.setLineSpacing(0,1.12f);
-        t.setPadding(0,dp(6),0,dp(8));
+        t.setTextSize(13);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setTextColor(Color.rgb(85,90,100));
         return t;
     }
 
     private TextView sectionTitle(String text){
         TextView t=new TextView(this);
         t.setText(text);
-        t.setTextSize(18);
+        t.setTextSize(17);
         t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setTextColor(Color.rgb(45,45,45));
-        t.setPadding(0,dp(10),0,dp(6));
+        t.setTextColor(Color.rgb(40,44,50));
+        t.setPadding(0,dp(6),0,dp(3));
+        return t;
+    }
+
+    private TextView valueText(int size){
+        TextView t=new TextView(this);
+        t.setTextSize(size);
+        t.setTextColor(Color.rgb(35,38,44));
+        t.setLineSpacing(0,1.05f);
+        return t;
+    }
+
+    private TextView bodyText(String text){
+        TextView t=valueText(13);
+        t.setText(text);
+        t.setTextColor(Color.rgb(85,90,100));
+        t.setPadding(0,dp(4),0,dp(6));
         return t;
     }
 
     private Button tabButton(String text){
+        Button b=smallButton(text);
+        b.setTextSize(14);
+        return b;
+    }
+
+    private Button smallButton(String text){
         Button b=new Button(this);
         b.setText(text);
         b.setAllCaps(false);
+        b.setTextSize(14);
+        b.setPadding(dp(6),0,dp(6),0);
         return b;
     }
 
     private Button actionButton(String text){
-        Button b=new Button(this);
-        b.setText(text);
-        b.setAllCaps(false);
+        Button b=smallButton(text);
+        b.setTextColor(Color.rgb(35,38,44));
         return b;
     }
 
-    private LinearLayout.LayoutParams weight(){
-        return new LinearLayout.LayoutParams(0,dp(48),1);
+    private void showPage(int i){
+        statusPage.setVisibility(i==0?View.VISIBLE:View.GONE);
+        schedulePage.setVisibility(i==1?View.VISIBLE:View.GONE);
+        settingsPage.setVisibility(i==2?View.VISIBLE:View.GONE);
     }
 
-    private LinearLayout.LayoutParams weightWithMargin(boolean left){
-        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(52),1);
-        if(left)lp.setMargins(dp(4),0,0,0);
-        else lp.setMargins(0,0,dp(4),0);
-        return lp;
+    private ScrollView scroll(View child){
+        ScrollView s=new ScrollView(this);
+        s.setFillViewport(true);
+        s.addView(child,new ScrollView.LayoutParams(-1,-2));
+        return s;
+    }
+
+    private LinearLayout.LayoutParams weight(int h){return new LinearLayout.LayoutParams(0,h,1);}
+    private LinearLayout.LayoutParams half(boolean left){
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);
+        if(left)p.setMargins(dp(3),0,0,0); else p.setMargins(0,0,dp(3),0);
+        return p;
     }
 
     private GradientDrawable roundRect(int fill,float radius,int stroke){
@@ -627,25 +745,18 @@ public class MainActivity extends Activity {
         return d;
     }
 
-    private int dp(int value){
-        return (int)(value*getResources().getDisplayMetrics().density+0.5f);
-    }
+    private int dp(int v){return (int)(v*getResources().getDisplayMetrics().density+0.5f);}
+    private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
 
     private static void writeHtml(Socket socket,String bodyHtml) throws Exception{
         String html="<html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"+
-                "<style>body{font-family:sans-serif;padding:24px;line-height:1.5}pre{white-space:pre-wrap;word-break:break-word}</style>"+
-                "</head><body>"+bodyHtml+"</body></html>";
+                "<style>body{font-family:sans-serif;padding:24px;line-height:1.5}</style></head><body>"+
+                bodyHtml+"</body></html>";
         byte[] body=html.getBytes(StandardCharsets.UTF_8);
         OutputStream os=socket.getOutputStream();
-        os.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"+
-                "Content-Length: "+body.length+"\r\nConnection: close\r\n\r\n")
-                .getBytes(StandardCharsets.US_ASCII));
-        os.write(body);
-        os.flush();
-    }
-
-    private static String escape(String s){
-        return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");
+        os.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "+
+                body.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+        os.write(body);os.flush();
     }
 
     private static Map<String,String> parseQuery(String raw) throws Exception{
@@ -653,8 +764,7 @@ public class MainActivity extends Activity {
         if(raw==null)return map;
         for(String pair:raw.split("&")){
             String[] kv=pair.split("=",2);
-            map.put(URLDecoder.decode(kv[0],"UTF-8"),
-                    kv.length>1?URLDecoder.decode(kv[1],"UTF-8"):"");
+            map.put(URLDecoder.decode(kv[0],"UTF-8"),kv.length>1?URLDecoder.decode(kv[1],"UTF-8"):"");
         }
         return map;
     }
