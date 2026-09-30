@@ -65,19 +65,32 @@ public class MainActivity extends Activity {
                     String first=br.readLine(); if(first==null||!first.startsWith("GET "))throw new IllegalStateException("Invalid callback");
                     String path=first.split(" ")[1]; String line; while((line=br.readLine())!=null&&!line.isEmpty()){}
                     URI uri=new URI("http://127.0.0.1"+path); Map<String,String> q=parseQuery(uri.getRawQuery());
-                    byte[] body="<html><body><h2>Codex login received</h2><p>You can return to the app.</p></body></html>".getBytes(StandardCharsets.UTF_8);
                     OutputStream os=socket.getOutputStream();
+                    String html;
+                    try {
+                        if(q.get("error")!=null)throw new IllegalStateException("OAuth error: "+q.get("error"));
+                        String callbackState=q.get("state");
+                        String acceptedState=p.state+".onboarding_entrypoint=life_sciences";
+                        if(q.get("code")==null || !(p.state.equals(callbackState)||acceptedState.equals(callbackState)))
+                            throw new IllegalStateException("OAuth state/code mismatch");
+                        new CodexClient(this).exchangeCode(q.get("code"),p.verifier,redirect);
+                        Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login successful").apply();
+                        html="<html><body><h2>Codex login successful</h2><p>You can return to the app.</p></body></html>";
+                    } catch(Exception loginError) {
+                        String msg=String.valueOf(loginError.getMessage());
+                        Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login ERROR: "+msg).apply();
+                        html="<html><body><h2>Codex login failed</h2><pre>"+escape(msg)+"</pre><p>Return to the app and report this message.</p></body></html>";
+                    }
+                    byte[] body=html.getBytes(StandardCharsets.UTF_8);
                     os.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "+body.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
                     os.write(body); os.flush();
-                    if(q.get("error")!=null)throw new IllegalStateException("OAuth error: "+q.get("error"));
-                    if(q.get("code")==null||!p.state.equals(q.get("state")))throw new IllegalStateException("OAuth state/code mismatch");
-                    new CodexClient(this).exchangeCode(q.get("code"),p.verifier,redirect);
                 }
-                Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login successful").apply();
-            }catch(Exception e){Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login ERROR: "+e.getMessage()).apply();}
+            }catch(Exception e){Scheduler.prefs(this).edit().putString(Scheduler.KEY_LAST,"Login server ERROR: "+e.getMessage()).apply();}
             runOnUiThread(this::refreshUi);
         },"codex-oauth").start();
     }
+
+    private static String escape(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
 
     private static Map<String,String> parseQuery(String raw) throws Exception{
         Map<String,String> m=new HashMap<>(); if(raw==null)return m;
