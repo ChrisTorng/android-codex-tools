@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.TimePickerDialog;
 import android.content.Intent;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.pm.PackageInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -11,6 +13,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.ArrayAdapter;
@@ -54,13 +58,15 @@ public class MainActivity extends Activity {
     private TextView primaryPercent,primaryMeta;
     private TextView weeklyPercent,weeklyMeta;
     private QuotaProgressView primaryBar,weeklyBar;
-    private TextView scheduleSummary,lastEvent;
+    private TextView scheduleSummary,lastEvent,manualTriggerPreview;
 
     private Spinner modeSpinner;
     private TextView nextAlarmText,previewText,weeklySummary,todaySummary,tomorrowSummary;
 
     private TextView settingsAccount,exactAlarmText,versionText;
     private EditText ntfyEdit;
+    private Button ntfySaveButton;
+    private String ntfySavedValue="";
 
     @Override protected void onCreate(Bundle state){
         super.onCreate(state);
@@ -147,6 +153,11 @@ public class MainActivity extends Activity {
         scheduleSummary=valueText(15);
         root.addView(compactCard("下一次排程",scheduleSummary));
 
+        manualTriggerPreview=bodyText("");
+        manualTriggerPreview.setTextSize(12);
+        manualTriggerPreview.setPadding(dp(4),dp(2),dp(4),dp(3));
+        root.addView(manualTriggerPreview,new LinearLayout.LayoutParams(-1,-2));
+
         LinearLayout actions=new LinearLayout(this);
         Button check=actionButton("更新配額");
         Button trigger=actionButton("立即觸發");
@@ -156,9 +167,24 @@ public class MainActivity extends Activity {
         check.setOnClickListener(v->runCheck());
         trigger.setOnClickListener(v->confirmTrigger());
 
+        LinearLayout eventsCard=new LinearLayout(this);
+        eventsCard.setOrientation(LinearLayout.VERTICAL);
+        eventsCard.setPadding(dp(11),dp(6),dp(11),dp(6));
+        eventsCard.setBackground(roundRect(Color.WHITE,dp(13),Color.rgb(224,227,232)));
+        eventsCard.addView(sectionLabel("最近事件"));
+
+        ScrollView eventScroll=new ScrollView(this);
+        eventScroll.setFillViewport(false);
+        eventScroll.setVerticalScrollBarEnabled(true);
         lastEvent=valueText(13);
-        lastEvent.setMaxLines(2);
-        root.addView(compactCard("最近事件",lastEvent));
+        lastEvent.setTextIsSelectable(true);
+        lastEvent.setPadding(0,dp(4),dp(4),dp(4));
+        eventScroll.addView(lastEvent,new ScrollView.LayoutParams(-1,-2));
+        eventsCard.addView(eventScroll,new LinearLayout.LayoutParams(-1,0,1));
+
+        LinearLayout.LayoutParams eventLp=new LinearLayout.LayoutParams(-1,0,1);
+        eventLp.setMargins(0,dp(4),0,0);
+        root.addView(eventsCard,eventLp);
 
         return root;
     }
@@ -231,18 +257,40 @@ public class MainActivity extends Activity {
         TextView ntfyLabel=sectionTitle("ntfy");
         ntfyLabel.setPadding(0,dp(8),0,0);
         root.addView(ntfyLabel);
-        LinearLayout ntfyRow=new LinearLayout(this);
+
         ntfyEdit=new EditText(this);
         ntfyEdit.setSingleLine(true);
         ntfyEdit.setTextSize(14);
         ntfyEdit.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
-        Button save=smallButton("儲存");
-        ntfyRow.addView(ntfyEdit,new LinearLayout.LayoutParams(0,dp(48),1));
-        ntfyRow.addView(save,new LinearLayout.LayoutParams(dp(76),dp(46)));
-        root.addView(ntfyRow);
-        save.setOnClickListener(v->{
-            Scheduler.prefs(this).edit().putString(Scheduler.KEY_NTFY,ntfyEdit.getText().toString().trim()).apply();
+        root.addView(ntfyEdit,new LinearLayout.LayoutParams(-1,dp(50)));
+
+        LinearLayout ntfyActions=new LinearLayout(this);
+        Button copyNtfy=smallButton("複製");
+        ntfySaveButton=smallButton("儲存");
+        ntfyActions.addView(copyNtfy,half(false));
+        ntfyActions.addView(ntfySaveButton,half(true));
+        root.addView(ntfyActions,new LinearLayout.LayoutParams(-1,dp(44)));
+
+        copyNtfy.setOnClickListener(v->{
+            String value=ntfyEdit.getText().toString().trim();
+            ClipboardManager cm=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("ntfy URL",value));
+            toast("已複製 ntfy URL");
+        });
+        ntfySaveButton.setOnClickListener(v->{
+            ntfySavedValue=ntfyEdit.getText().toString().trim();
+            Scheduler.prefs(this).edit().putString(Scheduler.KEY_NTFY,ntfySavedValue).apply();
+            ntfySaveButton.setEnabled(false);
             toast("已儲存");
+        });
+        ntfyEdit.addTextChangedListener(new TextWatcher(){
+            @Override public void beforeTextChanged(CharSequence s,int start,int count,int after){}
+            @Override public void onTextChanged(CharSequence s,int start,int before,int count){
+                if(ntfySaveButton!=null){
+                    ntfySaveButton.setEnabled(!s.toString().trim().equals(ntfySavedValue));
+                }
+            }
+            @Override public void afterTextChanged(Editable e){}
         });
 
         exactAlarmText=valueText(14);
@@ -305,7 +353,16 @@ public class MainActivity extends Activity {
         String modeName=Scheduler.MODE_AUTO.equals(mode)?"Reset 後自動":
                 Scheduler.MODE_CUSTOM.equals(mode)?"錨點＋接續":"已關閉";
         scheduleSummary.setText(modeName+"\n"+Scheduler.formattedNext(this));
-        lastEvent.setText(Scheduler.last(this));
+
+        if(q.primaryConfirmed && q.primaryResetMs>now){
+            manualTriggerPreview.setText("現在立即觸發不會延長 5h 視窗 · 仍於 "+
+                    Scheduler.formatTime(q.primaryResetMs)+" reset");
+        }else{
+            manualTriggerPreview.setText("若現在觸發成功 · 預估 reset "+
+                    Scheduler.formatTime(now+5*60*60_000L));
+        }
+
+        lastEvent.setText(Scheduler.history(this));
     }
 
     private void refreshSchedule(){
@@ -332,7 +389,9 @@ public class MainActivity extends Activity {
         settingsAccount.setText(signed?"已登入":"尚未登入");
         exactAlarmText.setText(Scheduler.canExact(this)?"已允許；Doze 下可使用 exact alarm":"尚未允許，排程可能延後");
         if(ntfyEdit!=null&&!ntfyEdit.hasFocus()){
-            ntfyEdit.setText(Scheduler.prefs(this).getString(Scheduler.KEY_NTFY,DEFAULT_NTFY));
+            ntfySavedValue=Scheduler.prefs(this).getString(Scheduler.KEY_NTFY,DEFAULT_NTFY);
+            ntfyEdit.setText(ntfySavedValue);
+            if(ntfySaveButton!=null)ntfySaveButton.setEnabled(false);
         }
         try{
             PackageInfo p=getPackageManager().getPackageInfo(getPackageName(),0);
@@ -562,9 +621,14 @@ public class MainActivity extends Activity {
     }
 
     private void confirmTrigger(){
+        Scheduler.Snapshot q=Scheduler.snapshot(this);
+        long now=System.currentTimeMillis();
+        String timing=(q.primaryConfirmed && q.primaryResetMs>now)
+                ?"目前 5 小時視窗已啟動，這次 request 不會延長視窗。\n目前 reset："+Scheduler.formatTime(q.primaryResetMs)
+                :"若觸發成功，預估 reset："+Scheduler.formatTime(now+5*60*60_000L);
         new AlertDialog.Builder(this)
                 .setTitle("立即觸發？")
-                .setMessage("會送出最小 Codex request 並消耗配額。")
+                .setMessage("會送出最小 Codex request 並消耗配額。\n\n"+timing)
                 .setNegativeButton("取消",null)
                 .setPositiveButton("觸發",(d,w)->{
                     toast("正在觸發…");
