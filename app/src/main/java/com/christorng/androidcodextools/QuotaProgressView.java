@@ -16,6 +16,7 @@ final class QuotaProgressView extends View {
     private float used=0f;
     private float pace=-1f;
     private String paceLabel="";
+    private float[] tickPositions=new float[0];
 
     QuotaProgressView(Context c){super(c);}
     QuotaProgressView(Context c, AttributeSet a){super(c,a);}
@@ -25,9 +26,14 @@ final class QuotaProgressView extends View {
     }
 
     void setProgress(double usedPercent,double pacePercent,String label){
+        setProgress(usedPercent,pacePercent,label,new float[0]);
+    }
+
+    void setProgress(double usedPercent,double pacePercent,String label,float[] ticks){
         used=(float)Math.max(0,Math.min(100,usedPercent));
         pace=pacePercent<0?-1f:(float)Math.max(0,Math.min(100,pacePercent));
         paceLabel=label==null?"":label;
+        tickPositions=ticks==null?new float[0]:ticks.clone();
         invalidate();
     }
 
@@ -44,6 +50,23 @@ final class QuotaProgressView extends View {
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(Color.rgb(225,229,235));
         canvas.drawRoundRect(rect,radius,radius,paint);
+
+        if(tickPositions.length>0){
+            float cy=(barTop+barBottom)/2f;
+            float r=Math.max(1.8f*density,barHeight*0.12f);
+            for(float p:tickPositions){
+                if(p<=0f||p>=100f)continue;
+                float x=getWidth()*p/100f;
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(Color.argb(155,255,255,255));
+                canvas.drawCircle(x,cy,r,paint);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(Math.max(1f,density));
+                paint.setColor(Color.argb(95,30,35,45));
+                canvas.drawCircle(x,cy,r,paint);
+            }
+            paint.setStyle(Paint.Style.FILL);
+        }
 
         float fill=getWidth()*used/100f;
         float paceX=pace<0?0:getWidth()*pace/100f;
