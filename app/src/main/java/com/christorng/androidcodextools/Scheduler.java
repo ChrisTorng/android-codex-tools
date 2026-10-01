@@ -2,6 +2,10 @@ package com.christorng.androidcodextools;
 
 import android.app.AlarmManager;
 import android.app.PendingIntent;
+import android.app.job.JobInfo;
+import android.app.job.JobScheduler;
+import android.content.ComponentName;
+import android.os.PersistableBundle;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -44,6 +48,7 @@ final class Scheduler {
     private static final String KEY_LAST_CHECK="quota_last_check";
     private static final String KEY_PRIMARY_CONFIRMED="quota_primary_confirmed";
     private static final String KEY_LAST_ALARM_RECEIVED="last_alarm_received";
+    private static final String KEY_LAST_BACKUP_RECEIVED="last_backup_received";
     private static final String KEY_RESET_AVAILABLE="reset_available_count";
     private static final String KEY_RESET_CREDIT_ID="reset_credit_id";
     private static final String KEY_RESET_TITLE="reset_credit_title";
@@ -65,6 +70,11 @@ final class Scheduler {
     private static final long RESET_TOLERANCE_MS=60_000L;
     private static final long RESET_GRACE_MS=15_000L;
     private static final int REQUEST_CODE=1001;
+    private static final int BACKUP_JOB_ID=2101;
+    private static final int WATCHDOG_JOB_ID=2102;
+    private static final long BACKUP_DELAY_MS=90_000L;
+    private static final long BACKUP_DEADLINE_EXTRA_MS=8*60_000L;
+    private static final long WATCHDOG_PERIOD_MS=15*60_000L;
 
     static final class Snapshot {
         final String plan;
@@ -176,8 +186,13 @@ final class Scheduler {
     static long next(Context c){return prefs(c).getLong(KEY_NEXT,0);}
     static String nextReason(Context c){return prefs(c).getString(KEY_NEXT_REASON,"");}
     static String lastAlarmReceived(Context c){return prefs(c).getString(KEY_LAST_ALARM_RECEIVED,"—");}
+    static String lastBackupReceived(Context c){return prefs(c).getString(KEY_LAST_BACKUP_RECEIVED,"—");}
     static void markAlarmReceived(Context c){
         prefs(c).edit().putString(KEY_LAST_ALARM_RECEIVED,formatTime(System.currentTimeMillis())).apply();
+    }
+    private static void markBackupReceived(Context c,String source){
+        prefs(c).edit().putString(KEY_LAST_BACKUP_RECEIVED,
+                formatTime(System.currentTimeMillis())+" · "+source).apply();
     }
 
     static boolean resetEligibleNow(Context c){
@@ -552,17 +567,79 @@ final class Scheduler {
                 .putString(KEY_NEXT_KIND,kind)
                 .putInt(KEY_NEXT_AUTO_COUNT,autoCount)
                 .apply();
+        scheduleBackupJobs(c,when);
     }
 
     static void cancelAlarm(Context c){
         AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
         am.cancel(pendingIntent(c));
+        JobScheduler js=(JobScheduler)c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+        if(js!=null){
+            js.cancel(BACKUP_JOB_ID);
+            js.cancel(WATCHDOG_JOB_ID);
+        }
         prefs(c).edit()
                 .remove(KEY_NEXT)
                 .remove(KEY_NEXT_REASON)
                 .remove(KEY_NEXT_KIND)
                 .remove(KEY_NEXT_AUTO_COUNT)
                 .apply();
+    }
+
+    private static void scheduleBackupJobs(Context c,long when){
+        JobScheduler js=(JobScheduler)c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+        if(js==null)return;
+
+        long now=System.currentTimeMillis();
+        long delay=Math.max(0,when-now+BACKUP_DELAY_MS);
+
+        PersistableBundle extras=new PersistableBundle();
+        extras.putLong("expected_when",when);
+        extras.putString("source","單次保底");
+        JobInfo backup=new JobInfo.Builder(BACKUP_JOB_ID,
+                new ComponentName(c,BackupJobService.class))
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setMinimumLatency(delay)
+                .setOverrideDeadline(delay+BACKUP_DEADLINE_EXTRA_MS)
+                .setPersisted(true)
+                .setExtras(extras)
+                .build();
+        js.schedule(backup);
+
+        PersistableBundle watchdogExtras=new PersistableBundle();
+        watchdogExtras.putLong("expected_when",0L);
+        watchdogExtras.putString("source","15 分鐘 watchdog");
+        JobInfo watchdog=new JobInfo.Builder(WATCHDOG_JOB_ID,
+                new ComponentName(c,BackupJobService.class))
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setPeriodic(WATCHDOG_PERIOD_MS)
+                .setPersisted(true)
+                .setExtras(watchdogExtras)
+                .build();
+        js.schedule(watchdog);
+    }
+
+    static void onBackupJob(Context c,long expectedWhen,String source){
+        if(!enabled(c))return;
+        long now=System.currentTimeMillis();
+        long current=next(c);
+
+        if(expectedWhen>0){
+            if(current<=0 || Math.abs(current-expectedWhen)>2_000L || now<expectedWhen){
+                return; // stale backup for an event that has already been rescheduled.
+            }
+            markBackupReceived(c,source);
+            note(c,"保底排程接管 · "+source);
+            onAlarm(c);
+            return;
+        }
+
+        // Periodic watchdog: only take over if the intended event is already overdue.
+        if(current>0 && now>=current+2*60_000L){
+            markBackupReceived(c,source);
+            note(c,"排程逾時，由 watchdog 接管");
+            onAlarm(c);
+        }
     }
 
     private static PendingIntent pendingIntent(Context c){
