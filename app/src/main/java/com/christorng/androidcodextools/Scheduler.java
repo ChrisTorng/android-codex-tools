@@ -22,6 +22,7 @@ final class Scheduler {
     static final String PREFS="app";
     static final String KEY_NTFY="ntfy_url";
     static final String KEY_LAST="last_status";
+    private static final String KEY_HISTORY="event_history_v1";
     static final String KEY_NEXT="next_alarm_ms";
     static final String KEY_NEXT_REASON="next_alarm_reason";
     static final String KEY_MODE="scheduler_mode";
@@ -99,7 +100,43 @@ final class Scheduler {
 
     static boolean enabled(Context c){return !MODE_OFF.equals(mode(c));}
     static String last(Context c){return prefs(c).getString(KEY_LAST,"尚無紀錄");}
-    static void note(Context c,String message){prefs(c).edit().putString(KEY_LAST,message).apply();}
+    static String history(Context c){
+        SharedPreferences p=prefs(c);
+        String raw=p.getString(KEY_HISTORY,"");
+        if(raw==null||raw.isEmpty())return p.getString(KEY_LAST,"尚無紀錄");
+        String[] items=raw.split("\\u001e",-1);
+        StringBuilder out=new StringBuilder();
+        for(int i=items.length-1;i>=0;i--){
+            String item=items[i].trim();
+            if(item.isEmpty())continue;
+            if(out.length()>0)out.append("\n");
+            out.append(item);
+        }
+        return out.length()==0?"尚無紀錄":out.toString();
+    }
+    static void note(Context c,String message){
+        SharedPreferences p=prefs(c);
+        String oldHistory=p.getString(KEY_HISTORY,"");
+        StringBuilder h=new StringBuilder();
+        if(oldHistory!=null&&!oldHistory.isEmpty()){
+            String[] items=oldHistory.split("\\u001e",-1);
+            int start=Math.max(0,items.length-19);
+            for(int i=start;i<items.length;i++){
+                String item=items[i].trim();
+                if(item.isEmpty())continue;
+                if(h.length()>0)h.append("\u001e");
+                h.append(item);
+            }
+        }else{
+            String oldLast=p.getString(KEY_LAST,"");
+            if(oldLast!=null&&!oldLast.isEmpty()&&!oldLast.equals("尚無紀錄")){
+                h.append(oldLast);
+            }
+        }
+        if(h.length()>0)h.append("\u001e");
+        h.append(message);
+        p.edit().putString(KEY_LAST,message).putString(KEY_HISTORY,h.toString()).apply();
+    }
     static long next(Context c){return prefs(c).getLong(KEY_NEXT,0);}
     static String nextReason(Context c){return prefs(c).getString(KEY_NEXT_REASON,"");}
     static String lastAlarmReceived(Context c){return prefs(c).getString(KEY_LAST_ALARM_RECEIVED,"—");}
