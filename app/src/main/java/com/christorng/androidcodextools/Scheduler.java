@@ -71,10 +71,8 @@ final class Scheduler {
     private static final long RESET_GRACE_MS=15_000L;
     private static final int REQUEST_CODE=1001;
     private static final int BACKUP_JOB_ID=2101;
-    private static final int WATCHDOG_JOB_ID=2102;
     private static final long BACKUP_DELAY_MS=90_000L;
     private static final long BACKUP_DEADLINE_EXTRA_MS=8*60_000L;
-    private static final long WATCHDOG_PERIOD_MS=15*60_000L;
 
     static final class Snapshot {
         final String plan;
@@ -555,11 +553,7 @@ final class Scheduler {
         if(Build.VERSION.SDK_INT>=31&&!am.canScheduleExactAlarms()){
             am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,when,pi);
         }else{
-            Intent show=new Intent(c,MainActivity.class);
-            PendingIntent showPi=PendingIntent.getActivity(
-                    c,REQUEST_CODE+1,show,
-                    PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-            am.setAlarmClock(new AlarmManager.AlarmClockInfo(when,showPi),pi);
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,when,pi);
         }
         prefs(c).edit()
                 .putLong(KEY_NEXT,when)
@@ -576,7 +570,6 @@ final class Scheduler {
         JobScheduler js=(JobScheduler)c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
         if(js!=null){
             js.cancel(BACKUP_JOB_ID);
-            js.cancel(WATCHDOG_JOB_ID);
         }
         prefs(c).edit()
                 .remove(KEY_NEXT)
@@ -605,41 +598,20 @@ final class Scheduler {
                 .setExtras(extras)
                 .build();
         js.schedule(backup);
-
-        PersistableBundle watchdogExtras=new PersistableBundle();
-        watchdogExtras.putLong("expected_when",0L);
-        watchdogExtras.putString("source","15 分鐘 watchdog");
-        JobInfo watchdog=new JobInfo.Builder(WATCHDOG_JOB_ID,
-                new ComponentName(c,BackupJobService.class))
-                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                .setPeriodic(WATCHDOG_PERIOD_MS)
-                .setPersisted(true)
-                .setExtras(watchdogExtras)
-                .build();
-        js.schedule(watchdog);
     }
 
     static void onBackupJob(Context c,long expectedWhen,String source){
-        if(!enabled(c))return;
+        if(!enabled(c)||expectedWhen<=0)return;
         long now=System.currentTimeMillis();
         long current=next(c);
 
-        if(expectedWhen>0){
-            if(current<=0 || Math.abs(current-expectedWhen)>2_000L || now<expectedWhen){
-                return; // stale backup for an event that has already been rescheduled.
-            }
-            markBackupReceived(c,source);
-            note(c,"保底排程接管 · "+source);
-            onAlarm(c);
-            return;
+        if(current<=0 || Math.abs(current-expectedWhen)>2_000L || now<expectedWhen){
+            return; // stale backup for an event that has already been rescheduled.
         }
 
-        // Periodic watchdog: only take over if the intended event is already overdue.
-        if(current>0 && now>=current+2*60_000L){
-            markBackupReceived(c,source);
-            note(c,"排程逾時，由 watchdog 接管");
-            onAlarm(c);
-        }
+        markBackupReceived(c,source);
+        note(c,"保底排程接管 · "+source);
+        onAlarm(c);
     }
 
     private static PendingIntent pendingIntent(Context c){
