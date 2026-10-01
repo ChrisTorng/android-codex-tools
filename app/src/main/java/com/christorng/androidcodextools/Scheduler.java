@@ -39,6 +39,8 @@ final class Scheduler {
     private static final String KEY_SECONDARY_USED="quota_secondary_used";
     private static final String KEY_SECONDARY_RESET="quota_secondary_reset";
     private static final String KEY_LAST_CHECK="quota_last_check";
+    private static final String KEY_PRIMARY_CONFIRMED="quota_primary_confirmed";
+    private static final String KEY_LAST_ALARM_RECEIVED="last_alarm_received";
 
     private static final String KEY_NEXT_KIND="next_event_kind";
     private static final String KEY_NEXT_AUTO_COUNT="next_event_auto_count";
@@ -58,6 +60,7 @@ final class Scheduler {
         final String plan;
         final boolean allowed;
         final boolean primaryActive;
+        final boolean primaryConfirmed;
         final double primaryUsed;
         final long primaryResetMs;
         final boolean secondaryActive;
@@ -69,6 +72,7 @@ final class Scheduler {
             plan=p.getString(KEY_PLAN,"—");
             allowed=p.getBoolean(KEY_ALLOWED,true);
             primaryActive=p.getBoolean(KEY_PRIMARY_ACTIVE,false);
+            primaryConfirmed=p.getBoolean(KEY_PRIMARY_CONFIRMED,false);
             primaryUsed=Double.longBitsToDouble(p.getLong(KEY_PRIMARY_USED,Double.doubleToLongBits(0)));
             primaryResetMs=p.getLong(KEY_PRIMARY_RESET,0);
             secondaryActive=p.getBoolean(KEY_SECONDARY_ACTIVE,false);
@@ -98,6 +102,10 @@ final class Scheduler {
     static void note(Context c,String message){prefs(c).edit().putString(KEY_LAST,message).apply();}
     static long next(Context c){return prefs(c).getLong(KEY_NEXT,0);}
     static String nextReason(Context c){return prefs(c).getString(KEY_NEXT_REASON,"");}
+    static String lastAlarmReceived(Context c){return prefs(c).getString(KEY_LAST_ALARM_RECEIVED,"—");}
+    static void markAlarmReceived(Context c){
+        prefs(c).edit().putString(KEY_LAST_ALARM_RECEIVED,formatTime(System.currentTimeMillis())).apply();
+    }
 
     static int chainRemaining(Context c){return prefs(c).getInt(KEY_CHAIN_REMAINING,0);}
     static long chainResetMs(Context c){return prefs(c).getLong(KEY_CHAIN_RESET,0);}
@@ -105,7 +113,7 @@ final class Scheduler {
     static void checkNow(Context c){
         try{
             CodexClient.Quota q=new CodexClient(c).getQuota();
-            storeQuota(c,q);
+            storeQuota(c,q,false);
             record(c,"配額已更新");
             if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
             else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
@@ -120,7 +128,7 @@ final class Scheduler {
             cli.triggerMinimal();
             Thread.sleep(2_000L);
             CodexClient.Quota q=cli.getQuota();
-            storeQuota(c,q);
+            storeQuota(c,q,true);
             record(c,"手動觸發成功");
             notifyNtfy(c,"Codex 手動觸發成功",quotaNotification(q));
             if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
@@ -148,10 +156,11 @@ final class Scheduler {
         try{
             CodexClient cli=new CodexClient(c);
             CodexClient.Quota q=cli.getQuota();
-            storeQuota(c,q);
+            storeQuota(c,q,false);
 
-            if(q.primary!=null){
-                record(c,"5 小時視窗仍有效，等待重置");
+            Snapshot observed=snapshot(c);
+            if(observed.primaryConfirmed && observed.primaryResetMs>System.currentTimeMillis()){
+                record(c,"5 小時視窗已確認有效，等待重置");
                 scheduleAutoFromQuota(c,q);
                 return;
             }
@@ -165,7 +174,7 @@ final class Scheduler {
             cli.triggerMinimal();
             Thread.sleep(2_000L);
             CodexClient.Quota after=cli.getQuota();
-            storeQuota(c,after);
+            storeQuota(c,after,true);
             record(c,"已自動建立新的 5 小時視窗");
             notifyNtfy(c,"Codex 5 小時配額已啟動",quotaNotification(after));
             scheduleAutoFromQuota(c,after);
@@ -181,18 +190,19 @@ final class Scheduler {
         try{
             CodexClient cli=new CodexClient(c);
             CodexClient.Quota q=cli.getQuota();
-            storeQuota(c,q);
+            storeQuota(c,q,false);
             long now=System.currentTimeMillis();
 
-            if(q.primary!=null){
-                long reset=q.primary.resetAt*1000L;
+            Snapshot observed=snapshot(c);
+            if(observed.primaryConfirmed && observed.primaryResetMs>now){
+                long reset=observed.primaryResetMs;
                 long wait=reset-now;
                 if(wait>=0 && wait<=RESET_TOLERANCE_MS){
                     record(c,"錨點距 5 小時重置僅 "+Math.max(1,wait/1000)+" 秒，延後至重置後再觸發");
                     scheduleEvent(c,reset+RESET_GRACE_MS,"等候 5 小時重置",EVENT_ANCHOR_RETRY,autoCount);
                     return;
                 }
-                record(c,"錨點到時但 5 小時視窗仍有效，本次略過");
+                record(c,"錨點到時但已確認的 5 小時視窗仍有效，本次略過");
                 scheduleNextCustom(c,now+1_000L);
                 return;
             }
@@ -206,7 +216,7 @@ final class Scheduler {
             cli.triggerMinimal();
             Thread.sleep(2_000L);
             CodexClient.Quota after=cli.getQuota();
-            storeQuota(c,after);
+            storeQuota(c,after,true);
             record(c,retry?"重置後延遲觸發成功":"錨點觸發成功");
             notifyNtfy(c,"Codex 排程觸發成功",quotaNotification(after));
             startChainFrom(c,after,autoCount);
@@ -229,11 +239,12 @@ final class Scheduler {
         try{
             CodexClient cli=new CodexClient(c);
             CodexClient.Quota q=cli.getQuota();
-            storeQuota(c,q);
+            storeQuota(c,q,false);
             long now=System.currentTimeMillis();
 
-            if(q.primary!=null){
-                long reset=q.primary.resetAt*1000L;
+            Snapshot observed=snapshot(c);
+            if(observed.primaryConfirmed && observed.primaryResetMs>now){
+                long reset=observed.primaryResetMs;
                 record(c,"自動接續等待實際 5 小時重置");
                 prefs(c).edit().putLong(KEY_CHAIN_RESET,reset).apply();
                 scheduleEvent(c,Math.max(now+5_000L,reset+RESET_GRACE_MS),
@@ -251,15 +262,16 @@ final class Scheduler {
             cli.triggerMinimal();
             Thread.sleep(2_000L);
             CodexClient.Quota after=cli.getQuota();
-            storeQuota(c,after);
+            storeQuota(c,after,true);
             remaining--;
             record(c,"自動接續觸發成功"+(remaining>0?"，尚餘 "+remaining+" 次":""));
             notifyNtfy(c,"Codex 自動接續成功",quotaNotification(after));
 
-            if(remaining>0 && after.primary!=null){
+            Snapshot afterObserved=snapshot(c);
+            if(remaining>0 && afterObserved.primaryConfirmed && afterObserved.primaryResetMs>System.currentTimeMillis()){
                 prefs(c).edit()
                         .putInt(KEY_CHAIN_REMAINING,remaining)
-                        .putLong(KEY_CHAIN_RESET,after.primary.resetAt*1000L)
+                        .putLong(KEY_CHAIN_RESET,afterObserved.primaryResetMs)
                         .apply();
             }else{
                 clearChain(c);
@@ -274,10 +286,11 @@ final class Scheduler {
     }
 
     private static void startChainFrom(Context c,CodexClient.Quota after,int count){
-        if(count>0 && after.primary!=null){
+        Snapshot s=snapshot(c);
+        if(count>0 && s.primaryConfirmed && s.primaryResetMs>System.currentTimeMillis()){
             prefs(c).edit()
                     .putInt(KEY_CHAIN_REMAINING,count)
-                    .putLong(KEY_CHAIN_RESET,after.primary.resetAt*1000L)
+                    .putLong(KEY_CHAIN_RESET,s.primaryResetMs)
                     .apply();
         }else{
             clearChain(c);
@@ -298,7 +311,7 @@ final class Scheduler {
 
         Snapshot s=snapshot(c);
         long now=System.currentTimeMillis();
-        if(s.primaryActive && s.primaryResetMs>now){
+        if(s.primaryConfirmed && s.primaryResetMs>now){
             scheduleEvent(c,s.primaryResetMs+RESET_GRACE_MS,"5 小時視窗重置後",EVENT_AUTO,0);
         }else if(s.secondaryActive && s.secondaryUsed>=100.0 && s.secondaryResetMs>now){
             scheduleEvent(c,s.secondaryResetMs+RESET_GRACE_MS,"週配額重置後",EVENT_AUTO,0);
@@ -309,17 +322,20 @@ final class Scheduler {
 
     private static void scheduleAutoFromQuota(Context c,CodexClient.Quota q){
         long now=System.currentTimeMillis();
-        if(q.primary!=null&&q.primary.resetAt>0){
-            scheduleEvent(c,q.primary.resetAt*1000L+RESET_GRACE_MS,"5 小時視窗重置後",EVENT_AUTO,0);
+        Snapshot s=snapshot(c);
+        if(s.primaryConfirmed && s.primaryResetMs>now){
+            scheduleEvent(c,s.primaryResetMs+RESET_GRACE_MS,"5 小時視窗重置後",EVENT_AUTO,0);
         }else if(q.secondary!=null&&q.secondary.usedPercent>=100.0&&q.secondary.resetAt>0){
             scheduleEvent(c,q.secondary.resetAt*1000L+RESET_GRACE_MS,"週配額重置後",EVENT_AUTO,0);
         }else{
-            scheduleEvent(c,now+60_000L,"檢查並視需要觸發",EVENT_AUTO,0);
+            // No confirmed 5h window. A zero-usage primary_window may merely be a
+            // sliding now+5h placeholder, so don't wait for that synthetic reset.
+            scheduleEvent(c,now+15_000L,"尚未確認 5 小時視窗，準備觸發",EVENT_AUTO,0);
         }
     }
 
     static void scheduleNextCustom(Context c,long afterMs){
-        ScheduleConfig.Slot anchor=ScheduleConfig.nextAnchor(c,afterMs);
+        ScheduleConfig.Slot anchor=nextEligibleAnchor(c,afterMs);
         long anchorMs=anchor==null?Long.MAX_VALUE:anchor.whenMs;
 
         int remaining=chainRemaining(c);
@@ -341,6 +357,19 @@ final class Scheduler {
         }
     }
 
+    private static ScheduleConfig.Slot nextEligibleAnchor(Context c,long afterMs){
+        ScheduleConfig.Slot anchor=ScheduleConfig.nextAnchor(c,afterMs);
+        Snapshot s=snapshot(c);
+        if(!s.primaryConfirmed || s.primaryResetMs<=System.currentTimeMillis())return anchor;
+
+        long impossibleBefore=s.primaryResetMs-RESET_TOLERANCE_MS;
+        int guard=0;
+        while(anchor!=null && anchor.whenMs<impossibleBefore && guard++<64){
+            anchor=ScheduleConfig.nextAnchor(c,anchor.whenMs+1_000L);
+        }
+        return anchor;
+    }
+
     static boolean canExact(Context c){
         AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
         return Build.VERSION.SDK_INT<31||am.canScheduleExactAlarms();
@@ -356,7 +385,11 @@ final class Scheduler {
         if(Build.VERSION.SDK_INT>=31&&!am.canScheduleExactAlarms()){
             am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,when,pi);
         }else{
-            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,when,pi);
+            Intent show=new Intent(c,MainActivity.class);
+            PendingIntent showPi=PendingIntent.getActivity(
+                    c,REQUEST_CODE+1,show,
+                    PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+            am.setAlarmClock(new AlarmManager.AlarmClockInfo(when,showPi),pi);
         }
         prefs(c).edit()
                 .putLong(KEY_NEXT,when)
@@ -420,18 +453,46 @@ final class Scheduler {
         return !q.allowed || (q.secondary!=null&&q.secondary.usedPercent>=100.0);
     }
 
-    private static void storeQuota(Context c,CodexClient.Quota q){
-        SharedPreferences.Editor e=prefs(c).edit()
+    private static void storeQuota(Context c,CodexClient.Quota q,boolean confirmBecauseTriggered){
+        SharedPreferences p=prefs(c);
+        long now=System.currentTimeMillis();
+        long previousCheck=p.getLong(KEY_LAST_CHECK,0);
+        long previousReset=p.getLong(KEY_PRIMARY_RESET,0);
+        boolean previousConfirmed=p.getBoolean(KEY_PRIMARY_CONFIRMED,false);
+
+        boolean confirmed=false;
+        long newReset=0;
+        if(q.primary!=null){
+            newReset=q.primary.resetAt*1000L;
+            if(confirmBecauseTriggered || q.primary.usedPercent>0.0001){
+                confirmed=true;
+            }else if(previousConfirmed && previousReset>now &&
+                    Math.abs(newReset-previousReset)<=120_000L){
+                confirmed=true;
+            }else if(previousCheck>0 && previousReset>0){
+                long elapsed=Math.max(0,now-previousCheck);
+                long slide=Math.abs(newReset-previousReset);
+                // Idle placeholder: reset moves almost one-for-one with each GET.
+                // Real active window: reset remains essentially fixed.
+                if(elapsed>=15_000L && slide<=Math.max(5_000L,elapsed/4)){
+                    confirmed=true;
+                }
+            }
+        }
+
+        SharedPreferences.Editor e=p.edit()
                 .putString(KEY_PLAN,q.plan)
                 .putBoolean(KEY_ALLOWED,q.allowed)
-                .putLong(KEY_LAST_CHECK,System.currentTimeMillis());
+                .putLong(KEY_LAST_CHECK,now)
+                .putBoolean(KEY_PRIMARY_CONFIRMED,confirmed);
 
         if(q.primary!=null){
             e.putBoolean(KEY_PRIMARY_ACTIVE,true)
                     .putLong(KEY_PRIMARY_USED,Double.doubleToLongBits(q.primary.usedPercent))
-                    .putLong(KEY_PRIMARY_RESET,q.primary.resetAt*1000L);
+                    .putLong(KEY_PRIMARY_RESET,newReset);
         }else{
             e.putBoolean(KEY_PRIMARY_ACTIVE,false)
+                    .putBoolean(KEY_PRIMARY_CONFIRMED,false)
                     .putLong(KEY_PRIMARY_USED,Double.doubleToLongBits(0))
                     .putLong(KEY_PRIMARY_RESET,0);
         }
