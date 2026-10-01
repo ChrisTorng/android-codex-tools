@@ -14,7 +14,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 
@@ -42,6 +44,13 @@ final class Scheduler {
     private static final String KEY_LAST_CHECK="quota_last_check";
     private static final String KEY_PRIMARY_CONFIRMED="quota_primary_confirmed";
     private static final String KEY_LAST_ALARM_RECEIVED="last_alarm_received";
+    private static final String KEY_RESET_AVAILABLE="reset_available_count";
+    private static final String KEY_RESET_CREDIT_ID="reset_credit_id";
+    private static final String KEY_RESET_TITLE="reset_credit_title";
+    private static final String KEY_RESET_DESCRIPTION="reset_credit_description";
+    private static final String KEY_RESET_EXPIRES="reset_credit_expires";
+    private static final String KEY_RESET_LAST_CHECK="reset_credit_last_check";
+    private static final String KEY_RESET_ERROR="reset_credit_error";
 
     private static final String KEY_NEXT_KIND="next_event_kind";
     private static final String KEY_NEXT_AUTO_COUNT="next_event_auto_count";
@@ -68,6 +77,8 @@ final class Scheduler {
         final double secondaryUsed;
         final long secondaryResetMs;
         final long lastCheckMs;
+        final int resetAvailableCount;
+        final String resetCreditId,resetTitle,resetDescription,resetExpires,resetError;
 
         Snapshot(SharedPreferences p){
             plan=p.getString(KEY_PLAN,"—");
@@ -80,6 +91,12 @@ final class Scheduler {
             secondaryUsed=Double.longBitsToDouble(p.getLong(KEY_SECONDARY_USED,Double.doubleToLongBits(0)));
             secondaryResetMs=p.getLong(KEY_SECONDARY_RESET,0);
             lastCheckMs=p.getLong(KEY_LAST_CHECK,0);
+            resetAvailableCount=p.getInt(KEY_RESET_AVAILABLE,0);
+            resetCreditId=p.getString(KEY_RESET_CREDIT_ID,"");
+            resetTitle=p.getString(KEY_RESET_TITLE,"");
+            resetDescription=p.getString(KEY_RESET_DESCRIPTION,"");
+            resetExpires=p.getString(KEY_RESET_EXPIRES,"");
+            resetError=p.getString(KEY_RESET_ERROR,"");
         }
     }
 
@@ -99,23 +116,29 @@ final class Scheduler {
     }
 
     static boolean enabled(Context c){return !MODE_OFF.equals(mode(c));}
-    static String last(Context c){return prefs(c).getString(KEY_LAST,"尚無紀錄");}
+    static String last(Context c){
+        return displayEvent(prefs(c).getString(KEY_LAST,""));
+    }
     static String history(Context c){
         SharedPreferences p=prefs(c);
         String raw=p.getString(KEY_HISTORY,"");
-        if(raw==null||raw.isEmpty())return p.getString(KEY_LAST,"尚無紀錄");
+        if(raw==null||raw.isEmpty()){
+            String last=p.getString(KEY_LAST,"");
+            return last==null||last.isEmpty()?"尚無紀錄":displayEvent(last);
+        }
         String[] items=raw.split("\\u001e",-1);
         StringBuilder out=new StringBuilder();
         for(int i=items.length-1;i>=0;i--){
             String item=items[i].trim();
             if(item.isEmpty())continue;
             if(out.length()>0)out.append("\n");
-            out.append(item);
+            out.append(displayEvent(item));
         }
         return out.length()==0?"尚無紀錄":out.toString();
     }
     static void note(Context c,String message){
         SharedPreferences p=prefs(c);
+        String encoded="@"+System.currentTimeMillis()+"|"+message;
         String oldHistory=p.getString(KEY_HISTORY,"");
         StringBuilder h=new StringBuilder();
         if(oldHistory!=null&&!oldHistory.isEmpty()){
@@ -134,8 +157,21 @@ final class Scheduler {
             }
         }
         if(h.length()>0)h.append("\u001e");
-        h.append(message);
-        p.edit().putString(KEY_LAST,message).putString(KEY_HISTORY,h.toString()).apply();
+        h.append(encoded);
+        p.edit().putString(KEY_LAST,encoded).putString(KEY_HISTORY,h.toString()).apply();
+    }
+    private static String displayEvent(String item){
+        if(item==null||item.isEmpty())return "尚無紀錄";
+        if(item.startsWith("@")){
+            int bar=item.indexOf('|');
+            if(bar>1){
+                try{
+                    long ms=Long.parseLong(item.substring(1,bar));
+                    return formatTime(ms)+" · "+item.substring(bar+1);
+                }catch(Exception ignored){}
+            }
+        }
+        return item;
     }
     static long next(Context c){return prefs(c).getLong(KEY_NEXT,0);}
     static String nextReason(Context c){return prefs(c).getString(KEY_NEXT_REASON,"");}
@@ -147,15 +183,79 @@ final class Scheduler {
     static int chainRemaining(Context c){return prefs(c).getInt(KEY_CHAIN_REMAINING,0);}
     static long chainResetMs(Context c){return prefs(c).getLong(KEY_CHAIN_RESET,0);}
 
-    static void checkNow(Context c){
+    static void checkNow(Context c){checkNow(c,true);}
+
+    static void checkNow(Context c,boolean logEvent){
         try{
-            CodexClient.Quota q=new CodexClient(c).getQuota();
+            CodexClient cli=new CodexClient(c);
+            CodexClient.Quota q=cli.getQuota();
             storeQuota(c,q,false);
-            record(c,"配額已更新");
+            refreshResetCredits(c,cli,logEvent);
+            if(logEvent)record(c,"配額已更新");
             if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
             else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
         }catch(Exception e){
-            record(c,"更新配額失敗: "+safe(e));
+            if(logEvent)record(c,"更新配額失敗: "+safe(e));
+        }
+    }
+
+    private static void refreshResetCredits(Context c,CodexClient cli,boolean force){
+        SharedPreferences p=prefs(c);
+        long now=System.currentTimeMillis();
+        long last=p.getLong(KEY_RESET_LAST_CHECK,0);
+        if(!force && now-last<10*60_000L)return;
+        try{
+            CodexClient.ResetCredits credits=cli.getResetCredits();
+            CodexClient.ResetCredit first=credits.first();
+            SharedPreferences.Editor e=p.edit()
+                    .putInt(KEY_RESET_AVAILABLE,credits.availableCount)
+                    .putLong(KEY_RESET_LAST_CHECK,now)
+                    .putString(KEY_RESET_ERROR,"");
+            if(first!=null){
+                e.putString(KEY_RESET_CREDIT_ID,first.id)
+                        .putString(KEY_RESET_TITLE,first.title==null?"Full reset":first.title)
+                        .putString(KEY_RESET_DESCRIPTION,first.description==null?"":first.description)
+                        .putString(KEY_RESET_EXPIRES,first.expiresAt==null?"":first.expiresAt);
+            }else{
+                e.remove(KEY_RESET_CREDIT_ID).remove(KEY_RESET_TITLE)
+                        .remove(KEY_RESET_DESCRIPTION).remove(KEY_RESET_EXPIRES);
+            }
+            e.apply();
+        }catch(Exception e){
+            p.edit()
+                    .putInt(KEY_RESET_AVAILABLE,0)
+                    .remove(KEY_RESET_CREDIT_ID)
+                    .putLong(KEY_RESET_LAST_CHECK,now)
+                    .putString(KEY_RESET_ERROR,safe(e))
+                    .apply();
+        }
+    }
+
+    static void consumeResetCredit(Context c){
+        try{
+            CodexClient cli=new CodexClient(c);
+            CodexClient.ResetCredits credits=cli.getResetCredits();
+            CodexClient.ResetCredit credit=credits.first();
+            if(credit==null||credits.availableCount<=0){
+                prefs(c).edit().putInt(KEY_RESET_AVAILABLE,0).remove(KEY_RESET_CREDIT_ID).apply();
+                record(c,"目前沒有可用的 reset");
+                return;
+            }
+
+            CodexClient.ResetResult result=cli.consumeResetCredit(credit.id);
+            prefs(c).edit().putBoolean(KEY_PRIMARY_CONFIRMED,false).apply();
+            Thread.sleep(1_000L);
+
+            CodexClient.Quota q=cli.getQuota();
+            storeQuota(c,q,false);
+            refreshResetCredits(c,cli,true);
+            record(c,"Reset 完成 · "+result.windowsReset+" 個視窗");
+            notifyNtfy(c,"Codex Reset 完成","已重置 "+result.windowsReset+" 個 usage window");
+
+            if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
+            else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
+        }catch(Exception e){
+            record(c,"Reset 失敗: "+safe(e));
         }
     }
 
@@ -454,8 +554,16 @@ final class Scheduler {
 
     static String formatTime(long ms){
         if(ms<=0)return "—";
-        DateTimeFormatter f=DateTimeFormatter.ofPattern("M/d (E) HH:mm:ss",Locale.TAIWAN);
-        return Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).format(f);
+        ZonedDateTime z=Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault());
+        LocalDate d=z.toLocalDate();
+        LocalDate today=LocalDate.now(ZoneId.systemDefault());
+        String time=String.format(Locale.TAIWAN,"%02d:%02d:%02d",z.getHour(),z.getMinute(),z.getSecond());
+        if(d.equals(today))return time;
+        if(d.equals(today.plusDays(1)))return "明天 "+time;
+        if(d.equals(today.minusDays(1)))return "昨天 "+time;
+        String[] weekday={"一","二","三","四","五","六","日"};
+        return String.format(Locale.TAIWAN,"%d/%d (%s) %s",
+                d.getMonthValue(),d.getDayOfMonth(),weekday[d.getDayOfWeek().getValue()-1],time);
     }
 
     static String formattedNext(Context c){
@@ -547,7 +655,7 @@ final class Scheduler {
     }
 
     private static void record(Context c,String message){
-        note(c,formatTime(System.currentTimeMillis())+" · "+message);
+        note(c,message);
     }
 
     private static String quotaNotification(CodexClient.Quota q){
