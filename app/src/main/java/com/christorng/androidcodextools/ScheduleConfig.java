@@ -16,6 +16,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 final class ScheduleConfig {
     static final String KEY_WEEKLY="schedule_weekly_v2";
@@ -69,6 +71,10 @@ final class ScheduleConfig {
             String legacy=Scheduler.prefs(c).getString("schedule_rules_v1",null);
             if(legacy!=null){
                 List<Rule> migrated=parseRules(legacy,true);
+                // Early test builds used 08/13/18/23 as an accidental default.
+                // If that untouched pattern is detected, migrate it to the user's
+                // intended 09/13/18/23 schedule.
+                if(looksLikeOldDefault(migrated))return defaultDailyAnchors();
                 if(!migrated.isEmpty())return migrated;
             }
             return defaultDailyAnchors();
@@ -169,6 +175,68 @@ final class ScheduleConfig {
             if(r.enabled&&r.days[day])out.add(r.copy());
         }
         return out;
+    }
+
+    static Set<String> conflictingRuleIds(List<Rule> rules,boolean weekly){
+        Set<String> conflicts=new LinkedHashSet<>();
+        if(rules==null||rules.size()<2)return conflicts;
+
+        class Occurrence {
+            final Rule rule;
+            final int minute;
+            Occurrence(Rule r,int m){rule=r;minute=m;}
+        }
+
+        List<Occurrence> occurrences=new ArrayList<>();
+        if(weekly){
+            for(Rule r:rules){
+                if(!r.enabled)continue;
+                for(int d=0;d<7;d++){
+                    if(r.days[d])occurrences.add(new Occurrence(r,d*1440+r.hour*60+r.minute));
+                }
+            }
+            int week=7*1440;
+            for(int i=0;i<occurrences.size();i++){
+                for(int j=i+1;j<occurrences.size();j++){
+                    Occurrence a=occurrences.get(i),b=occurrences.get(j);
+                    if(a.rule.id.equals(b.rule.id))continue;
+                    int diff=Math.abs(a.minute-b.minute);
+                    diff=Math.min(diff,week-diff);
+                    if(diff>0&&diff<300){
+                        conflicts.add(a.rule.id);
+                        conflicts.add(b.rule.id);
+                    }
+                }
+            }
+        }else{
+            for(Rule r:rules){
+                if(r.enabled)occurrences.add(new Occurrence(r,r.hour*60+r.minute));
+            }
+            for(int i=0;i<occurrences.size();i++){
+                for(int j=i+1;j<occurrences.size();j++){
+                    Occurrence a=occurrences.get(i),b=occurrences.get(j);
+                    int diff=Math.abs(a.minute-b.minute);
+                    if(diff>0&&diff<300){
+                        conflicts.add(a.rule.id);
+                        conflicts.add(b.rule.id);
+                    }
+                }
+            }
+        }
+        return conflicts;
+    }
+
+    private static boolean looksLikeOldDefault(List<Rule> rules){
+        if(rules==null||rules.size()!=4)return false;
+        int[] expected={8,13,18,23};
+        List<Rule> sorted=new ArrayList<>(rules);
+        sorted.sort(Comparator.comparingInt((Rule r)->r.hour).thenComparingInt(r->r.minute));
+        for(int i=0;i<4;i++){
+            Rule r=sorted.get(i);
+            if(!r.enabled||r.hour!=expected[i]||r.minute!=0||r.autoCount!=0)return false;
+            for(boolean d:r.days)if(!d)return false;
+        }
+        return true;
     }
 
     static String estimateRule(Rule r){
