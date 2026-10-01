@@ -43,6 +43,10 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -55,6 +59,7 @@ public class MainActivity extends Activity {
     private static final int ACCENT=Color.rgb(47,128,237);
 
     private View statusPage,schedulePage,settingsPage;
+    private Button tabStatus,tabSchedule,tabSettings;
 
     private TextView accountLine;
     private TextView primaryPercent,primaryMeta;
@@ -125,13 +130,14 @@ public class MainActivity extends Activity {
         shell.addView(header);
 
         LinearLayout tabs=new LinearLayout(this);
-        tabs.setPadding(dp(12),0,dp(12),dp(6));
-        Button s=tabButton("狀態");
-        Button p=tabButton("排程");
-        Button g=tabButton("設定");
-        tabs.addView(s,weight(dp(44)));
-        tabs.addView(p,weight(dp(44)));
-        tabs.addView(g,weight(dp(44)));
+        tabs.setPadding(dp(14),0,dp(14),dp(8));
+        tabs.setGravity(Gravity.CENTER);
+        tabStatus=tabButton("●  狀態");
+        tabSchedule=tabButton("◷  排程");
+        tabSettings=tabButton("⚙  設定");
+        tabs.addView(tabStatus,weight(dp(42)));
+        tabs.addView(tabSchedule,weight(dp(42)));
+        tabs.addView(tabSettings,weight(dp(42)));
         shell.addView(tabs);
 
         FrameLayout host=new FrameLayout(this);
@@ -143,9 +149,9 @@ public class MainActivity extends Activity {
         host.addView(settingsPage);
         shell.addView(host,new LinearLayout.LayoutParams(-1,0,1));
 
-        s.setOnClickListener(v->showPage(0));
-        p.setOnClickListener(v->showPage(1));
-        g.setOnClickListener(v->showPage(2));
+        tabStatus.setOnClickListener(v->showPage(0));
+        tabSchedule.setOnClickListener(v->showPage(1));
+        tabSettings.setOnClickListener(v->showPage(2));
         setContentView(shell);
         showPage(0);
     }
@@ -359,7 +365,9 @@ public class MainActivity extends Activity {
         if(q.primaryActive && q.primaryConfirmed){
             primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
             double pace=pace(now,q.primaryResetMs,5*60*60_000L);
-            primaryBar.setProgress(q.primaryUsed,pace,elapsedLabel(now,q.primaryResetMs,5*60*60_000L));
+            primaryBar.setProgress(q.primaryUsed,pace,
+                    elapsedLabel(now,q.primaryResetMs,5*60*60_000L),
+                    hourTicks(q.primaryResetMs,5*60*60_000L));
             primaryMeta.setText(String.format(Locale.TAIWAN,
                     "已確認啟動 · 時間進度 %.0f%% · reset %s",
                     pace,Scheduler.formatTime(q.primaryResetMs)));
@@ -376,7 +384,9 @@ public class MainActivity extends Activity {
         if(q.secondaryActive){
             weeklyPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.secondaryUsed));
             double pace=pace(now,q.secondaryResetMs,7*24*60*60_000L);
-            weeklyBar.setProgress(q.secondaryUsed,pace,elapsedLabel(now,q.secondaryResetMs,7*24*60*60_000L));
+            weeklyBar.setProgress(q.secondaryUsed,pace,
+                    elapsedLabel(now,q.secondaryResetMs,7*24*60*60_000L),
+                    midnightTicks(q.secondaryResetMs,7*24*60*60_000L));
             weeklyMeta.setText(String.format(Locale.TAIWAN,
                     "時間進度 %.0f%%  ·  reset %s",pace,Scheduler.formatTime(q.secondaryResetMs)));
         }else{
@@ -392,6 +402,8 @@ public class MainActivity extends Activity {
 
         boolean activeConfirmed=q.primaryConfirmed && q.primaryResetMs>now;
         triggerButton.setEnabled(!activeConfirmed);
+        triggerButton.setAlpha(activeConfirmed?0.38f:1f);
+        triggerButton.setTextColor(activeConfirmed?Color.rgb(145,149,156):Color.rgb(35,38,44));
         if(activeConfirmed){
             manualTriggerPreview.setText("5h 視窗進行中 · 下一次可重新開始：約 "+
                     Scheduler.formatTime(q.primaryResetMs));
@@ -417,7 +429,8 @@ public class MainActivity extends Activity {
         String mode=Scheduler.mode(this);
         modeSpinner.setSelection(Scheduler.MODE_AUTO.equals(mode)?1:Scheduler.MODE_CUSTOM.equals(mode)?2:0);
         nextAlarmText.setText(Scheduler.formattedNext(this)+
-                "\n上次系統 Alarm 收到："+Scheduler.lastAlarmReceived(this));
+                "\nAlarm："+Scheduler.lastAlarmReceived(this)+
+                "  ·  保底 Job："+Scheduler.lastBackupReceived(this));
         previewText.setText(Scheduler.MODE_CUSTOM.equals(mode)?Scheduler.customPreview(this):
                 Scheduler.MODE_AUTO.equals(mode)?"下一次以目前 quota reset 為基準":"排程已關閉");
 
@@ -677,12 +690,12 @@ public class MainActivity extends Activity {
     private void maybeAutoRefresh(boolean enteringScreen){
         if(!new CodexClient(this).signedIn()||quotaRefreshRunning)return;
         long now=System.currentTimeMillis();
-        long minGap=enteringScreen?30_000L:10*60_000L;
+        long minGap=enteringScreen?15_000L:10*60_000L;
         if(now-lastAutoRefreshStarted<minGap)return;
         quotaRefreshRunning=true;
         lastAutoRefreshStarted=now;
         new Thread(()->{
-            try{Scheduler.checkNow(getApplicationContext(),false);}
+            try{Scheduler.checkNow(getApplicationContext(),true);}
             finally{
                 quotaRefreshRunning=false;
                 runOnUiThread(this::refreshAll);
@@ -782,6 +795,40 @@ public class MainActivity extends Activity {
             }
             runOnUiThread(this::refreshAll);
         },"codex-oauth").start();
+    }
+
+    private float[] hourTicks(long reset,long duration){
+        if(reset<=0||duration<=0)return new float[0];
+        long start=reset-duration;
+        ZonedDateTime z=Instant.ofEpochMilli(start).atZone(ZoneId.systemDefault());
+        ZonedDateTime tick=z.truncatedTo(ChronoUnit.HOURS).plusHours(1);
+        List<Float> out=new ArrayList<>();
+        while(tick.toInstant().toEpochMilli()<=reset && out.size()<8){
+            long ms=tick.toInstant().toEpochMilli();
+            float p=(float)((ms-start)*100.0/duration);
+            if(p>0f&&p<100f)out.add(p);
+            tick=tick.plusHours(1);
+        }
+        float[] arr=new float[out.size()];
+        for(int i=0;i<out.size();i++)arr[i]=out.get(i);
+        return arr;
+    }
+
+    private float[] midnightTicks(long reset,long duration){
+        if(reset<=0||duration<=0)return new float[0];
+        long start=reset-duration;
+        ZonedDateTime z=Instant.ofEpochMilli(start).atZone(ZoneId.systemDefault());
+        ZonedDateTime tick=z.toLocalDate().plusDays(1).atStartOfDay(ZoneId.systemDefault());
+        List<Float> out=new ArrayList<>();
+        while(tick.toInstant().toEpochMilli()<=reset && out.size()<8){
+            long ms=tick.toInstant().toEpochMilli();
+            float p=(float)((ms-start)*100.0/duration);
+            if(p>0f&&p<100f)out.add(p);
+            tick=tick.plusDays(1);
+        }
+        float[] arr=new float[out.size()];
+        for(int i=0;i<out.size();i++)arr[i]=out.get(i);
+        return arr;
     }
 
     private String elapsedLabel(long now,long reset,long duration){
@@ -912,7 +959,18 @@ public class MainActivity extends Activity {
     private Button tabButton(String text){
         Button b=smallButton(text);
         b.setTextSize(14);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        b.setElevation(0f);
         return b;
+    }
+
+    private void styleTab(Button b,boolean selected){
+        b.setTextColor(selected?Color.WHITE:Color.rgb(78,84,94));
+        b.setBackground(roundRect(
+                selected?ACCENT:Color.TRANSPARENT,
+                dp(12),
+                selected?ACCENT:Color.TRANSPARENT));
+        b.setAlpha(selected?1f:0.9f);
     }
 
     private Button smallButton(String text){
@@ -934,6 +992,11 @@ public class MainActivity extends Activity {
         statusPage.setVisibility(i==0?View.VISIBLE:View.GONE);
         schedulePage.setVisibility(i==1?View.VISIBLE:View.GONE);
         settingsPage.setVisibility(i==2?View.VISIBLE:View.GONE);
+        if(tabStatus!=null){
+            styleTab(tabStatus,i==0);
+            styleTab(tabSchedule,i==1);
+            styleTab(tabSettings,i==2);
+        }
     }
 
     private ScrollView scroll(View child){
