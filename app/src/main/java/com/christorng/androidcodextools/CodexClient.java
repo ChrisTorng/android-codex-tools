@@ -38,6 +38,8 @@ final class CodexClient {
     static final String TOKEN_URL="https://auth.openai.com/oauth/token";
     static final String USAGE_URL="https://chatgpt.com/backend-api/wham/usage";
     static final String RESPONSES_URL="https://chatgpt.com/backend-api/codex/responses";
+    static final String RESET_CREDITS_URL="https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+    static final String RESET_CONSUME_URL="https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
     static final String SCOPE="openid profile email offline_access api.connectors.read api.connectors.invoke";
 
     private final SecureStore store;
@@ -73,6 +75,28 @@ final class CodexClient {
             String s=secondary==null?"Weekly: inactive":String.format(Locale.US,"Weekly used %.0f%%, reset %d",secondary.usedPercent,secondary.resetAt);
             return "Plan: "+plan+"\n"+p+"\n"+s+"\nAllowed: "+allowed;
         }
+    }
+
+    static final class ResetCredit {
+        final String id,title,description,expiresAt;
+        ResetCredit(String id,String title,String description,String expiresAt){
+            this.id=id;this.title=title;this.description=description;this.expiresAt=expiresAt;
+        }
+    }
+
+    static final class ResetCredits {
+        final int availableCount;
+        final List<ResetCredit> available;
+        ResetCredits(int count,List<ResetCredit> available){
+            this.availableCount=count;this.available=available;
+        }
+        ResetCredit first(){return available.isEmpty()?null:available.get(0);}
+    }
+
+    static final class ResetResult {
+        final String code;
+        final int windowsReset;
+        ResetResult(String code,int windowsReset){this.code=code;this.windowsReset=windowsReset;}
     }
 
     static Pkce newPkce() throws Exception {
@@ -136,6 +160,43 @@ final class CodexClient {
                 rate!=null&&rate.optBoolean("limit_reached",false),
                 window(rate==null?null:rate.optJSONObject("primary_window")),
                 window(rate==null?null:rate.optJSONObject("secondary_window")));
+    }
+
+    ResetCredits getResetCredits() throws Exception {
+        Request request=authHeaders(new Request.Builder().url(RESET_CREDITS_URL))
+                .get()
+                .build();
+        JSONObject root=new JSONObject(executeText(request));
+        int count=root.optInt("available_count",0);
+        List<ResetCredit> available=new ArrayList<>();
+        JSONArray credits=root.optJSONArray("credits");
+        if(credits!=null){
+            for(int i=0;i<credits.length();i++){
+                JSONObject o=credits.optJSONObject(i);
+                if(o==null||!"available".equalsIgnoreCase(o.optString("status","")))continue;
+                String id=o.optString("id","");
+                if(id.isEmpty())continue;
+                available.add(new ResetCredit(
+                        id,
+                        o.optString("title","Full reset"),
+                        o.optString("description",""),
+                        o.optString("expires_at","")));
+            }
+        }
+        return new ResetCredits(count,available);
+    }
+
+    ResetResult consumeResetCredit(String creditId) throws Exception {
+        JSONObject payload=new JSONObject();
+        payload.put("redeem_request_id",java.util.UUID.randomUUID().toString());
+        if(creditId!=null&&!creditId.isEmpty())payload.put("credit_id",creditId);
+        RequestBody body=RequestBody.create(payload.toString(),MediaType.get("application/json; charset=utf-8"));
+        Request request=authHeaders(new Request.Builder().url(RESET_CONSUME_URL))
+                .header("Accept","application/json")
+                .post(body)
+                .build();
+        JSONObject root=new JSONObject(executeText(request));
+        return new ResetResult(root.optString("code","unknown"),root.optInt("windows_reset",0));
     }
 
     int triggerMinimal() throws Exception {
