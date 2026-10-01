@@ -67,19 +67,27 @@ final class ScheduleConfig {
 
     static List<Rule> loadWeekly(Context c){
         String raw=Scheduler.prefs(c).getString(KEY_WEEKLY,null);
-        if(raw==null){
-            String legacy=Scheduler.prefs(c).getString("schedule_rules_v1",null);
-            if(legacy!=null){
-                List<Rule> migrated=parseRules(legacy,true);
-                // Early test builds used 08/13/18/23 as an accidental default.
-                // If that untouched pattern is detected, migrate it to the user's
-                // intended 09/13/18/23 schedule.
-                if(looksLikeOldDefault(migrated))return defaultDailyAnchors();
-                if(!migrated.isEmpty())return migrated;
+        if(raw!=null){
+            List<Rule> current=parseRules(raw,true);
+            if(looksLikeOldDefault(current)){
+                List<Rule> fixed=defaultDailyAnchors();
+                saveWeekly(c,fixed);
+                return fixed;
             }
-            return defaultDailyAnchors();
+            return current;
         }
-        return parseRules(raw,true);
+
+        String legacy=Scheduler.prefs(c).getString("schedule_rules_v1",null);
+        if(legacy!=null){
+            List<Rule> migrated=parseRules(legacy,true);
+            if(looksLikeOldDefault(migrated)){
+                List<Rule> fixed=defaultDailyAnchors();
+                saveWeekly(c,fixed);
+                return fixed;
+            }
+            if(!migrated.isEmpty())return migrated;
+        }
+        return defaultDailyAnchors();
     }
 
     private static List<Rule> defaultDailyAnchors(){
