@@ -180,6 +180,11 @@ final class Scheduler {
         prefs(c).edit().putString(KEY_LAST_ALARM_RECEIVED,formatTime(System.currentTimeMillis())).apply();
     }
 
+    static boolean resetEligibleNow(Context c){
+        Snapshot s=snapshot(c);
+        return !s.allowed || s.primaryUsed>=99.999 || s.secondaryUsed>=99.999;
+    }
+
     static int chainRemaining(Context c){return prefs(c).getInt(KEY_CHAIN_REMAINING,0);}
     static long chainResetMs(Context c){return prefs(c).getLong(KEY_CHAIN_RESET,0);}
 
@@ -234,6 +239,19 @@ final class Scheduler {
     static void consumeResetCredit(Context c){
         try{
             CodexClient cli=new CodexClient(c);
+
+            // Re-check live quota immediately before spending a reset credit.
+            CodexClient.Quota live=cli.getQuota();
+            storeQuota(c,live,false);
+            boolean exhausted=!live.allowed || live.limitReached ||
+                    (live.primary!=null&&live.primary.usedPercent>=99.999) ||
+                    (live.secondary!=null&&live.secondary.usedPercent>=99.999);
+            if(!exhausted){
+                record(c,"Reset 未執行：5 小時與週配額都尚未用盡");
+                refreshResetCredits(c,cli,true);
+                return;
+            }
+
             CodexClient.ResetCredits credits=cli.getResetCredits();
             CodexClient.ResetCredit credit=credits.first();
             if(credit==null||credits.availableCount<=0){
