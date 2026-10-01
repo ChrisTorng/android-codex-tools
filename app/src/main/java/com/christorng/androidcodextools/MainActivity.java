@@ -42,6 +42,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 public class MainActivity extends Activity {
     private static final String DEFAULT_NTFY="https://ntfy.sh/codex-8b7a238e0815ab41ffe56082eb6a7b21";
@@ -271,12 +272,17 @@ public class MainActivity extends Activity {
                 :"ChatGPT 尚未登入");
 
         long now=System.currentTimeMillis();
-        if(q.primaryActive){
+        if(q.primaryActive && q.primaryConfirmed){
             primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
             double pace=pace(now,q.primaryResetMs,5*60*60_000L);
             primaryBar.setProgress(q.primaryUsed,pace);
             primaryMeta.setText(String.format(Locale.TAIWAN,
-                    "時間進度 %.0f%%  ·  reset %s",pace,Scheduler.formatTime(q.primaryResetMs)));
+                    "已確認啟動 · 時間進度 %.0f%% · reset %s",
+                    pace,Scheduler.formatTime(q.primaryResetMs)));
+        }else if(q.primaryActive){
+            primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
+            primaryBar.setProgress(q.primaryUsed,-1);
+            primaryMeta.setText("尚未確認啟動 · 查詢顯示約 "+Scheduler.formatTime(q.primaryResetMs)+"（會滑動）");
         }else{
             primaryPercent.setText("—");
             primaryBar.setProgress(0,-1);
@@ -305,11 +311,15 @@ public class MainActivity extends Activity {
     private void refreshSchedule(){
         String mode=Scheduler.mode(this);
         modeSpinner.setSelection(Scheduler.MODE_AUTO.equals(mode)?1:Scheduler.MODE_CUSTOM.equals(mode)?2:0);
-        nextAlarmText.setText(Scheduler.formattedNext(this));
+        nextAlarmText.setText(Scheduler.formattedNext(this)+
+                "\n上次系統 Alarm 收到："+Scheduler.lastAlarmReceived(this));
         previewText.setText(Scheduler.MODE_CUSTOM.equals(mode)?Scheduler.customPreview(this):
                 Scheduler.MODE_AUTO.equals(mode)?"下一次以目前 quota reset 為基準":"排程已關閉");
 
-        weeklySummary.setText(rulesSummary(ScheduleConfig.loadWeekly(this),true));
+        List<ScheduleConfig.Rule> weeklyRules=ScheduleConfig.loadWeekly(this);
+        weeklySummary.setText(rulesSummary(weeklyRules,true));
+        weeklySummary.setTextColor(ScheduleConfig.conflictingRuleIds(weeklyRules,true).isEmpty()
+                ?Color.rgb(35,38,44):Color.rgb(198,104,0));
 
         ScheduleConfig.DayOverride today=ScheduleConfig.loadOverride(this,LocalDate.now());
         todaySummary.setText(overrideSummary(today,"使用每週預設"));
@@ -434,6 +444,7 @@ public class MainActivity extends Activity {
 
     private void renderRuleRows(LinearLayout list,List<ScheduleConfig.Rule> rules,boolean weekly,Runnable externalRedraw){
         list.removeAllViews();
+        Set<String> conflicts=ScheduleConfig.conflictingRuleIds(rules,weekly);
         if(rules.isEmpty()){
             TextView empty=bodyText("沒有錨點。");
             list.addView(empty);
@@ -443,7 +454,11 @@ public class MainActivity extends Activity {
             LinearLayout card=new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
             card.setPadding(dp(10),dp(8),dp(10),dp(8));
-            card.setBackground(roundRect(Color.WHITE,dp(12),Color.rgb(220,224,230)));
+            boolean conflict=conflicts.contains(rule.id);
+            card.setBackground(roundRect(
+                    conflict?Color.rgb(255,247,232):Color.WHITE,
+                    dp(12),
+                    conflict?Color.rgb(230,149,45):Color.rgb(220,224,230)));
 
             LinearLayout row=new LinearLayout(this);
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -456,7 +471,8 @@ public class MainActivity extends Activity {
 
             Button time=smallButton(rule.timeText());
             time.setOnClickListener(v->new TimePickerDialog(this,(TimePicker p,int h,int m)->{
-                rule.hour=h;rule.minute=m;time.setText(rule.timeText());
+                rule.hour=h;rule.minute=m;
+                renderRuleRows(list,rules,weekly,externalRedraw);
             },rule.hour,rule.minute,true).show());
             row.addView(time,new LinearLayout.LayoutParams(dp(92),dp(44)));
 
@@ -488,14 +504,19 @@ public class MainActivity extends Activity {
                     t.setMinWidth(0);
                     t.setPadding(0,0,0,0);
                     t.setChecked(rule.days[i]);
-                    t.setOnCheckedChangeListener((b,v)->rule.days[day]=v);
+                    t.setOnCheckedChangeListener((b,v)->{
+                        rule.days[day]=v;
+                        renderRuleRows(list,rules,weekly,externalRedraw);
+                    });
                     days.addView(t,new LinearLayout.LayoutParams(0,dp(40),1));
                 }
                 card.addView(days);
             }
 
-            TextView estimate=bodyText("預估："+ScheduleConfig.estimateRule(rule));
+            TextView estimate=bodyText((conflict?"⚠ 5 小時內與其他錨點衝突 · ":"預估：")+
+                    ScheduleConfig.estimateRule(rule));
             estimate.setTextSize(12);
+            if(conflict)estimate.setTextColor(Color.rgb(198,104,0));
             estimate.setPadding(0,dp(2),0,0);
             card.addView(estimate);
 
@@ -507,7 +528,9 @@ public class MainActivity extends Activity {
 
     private String rulesSummary(List<ScheduleConfig.Rule> rules,boolean weekly){
         if(rules.isEmpty())return "沒有錨點";
+        Set<String> conflicts=ScheduleConfig.conflictingRuleIds(rules,weekly);
         StringBuilder b=new StringBuilder();
+        if(!conflicts.isEmpty())b.append("⚠ 有小於 5 小時的錨點衝突\n");
         int shown=0;
         for(ScheduleConfig.Rule r:rules){
             if(!r.enabled)continue;
