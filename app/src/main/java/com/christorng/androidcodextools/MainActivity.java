@@ -14,6 +14,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.text.InputType;
 import android.text.Editable;
 import android.text.TextWatcher;
@@ -343,6 +344,26 @@ public class MainActivity extends Activity {
             catch(Exception e){toast("無法開啟系統設定");}
         });
 
+        TextView backgroundHelp=bodyText(
+                "Samsung 可能限制休眠 App 的 Alarm / Job。建議把 Android Codex Tools 加到「永不自動進入休眠」，並確認 App 電池設定不是「受限制」。");
+        root.addView(compactCard("背景執行",backgroundHelp));
+
+        LinearLayout batteryRow=new LinearLayout(this);
+        Button samsungNeverSleep=smallButton("Samsung 永不休眠");
+        Button appBattery=smallButton("App 電池設定");
+        batteryRow.addView(samsungNeverSleep,half(false));
+        batteryRow.addView(appBattery,half(true));
+        root.addView(batteryRow,new LinearLayout.LayoutParams(-1,dp(44)));
+
+        samsungNeverSleep.setOnClickListener(v->openSamsungNeverSleep());
+        appBattery.setOnClickListener(v->{
+            try{
+                Intent i=new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:"+getPackageName()));
+                startActivity(i);
+            }catch(Exception e){toast("無法開啟 App 設定");}
+        });
+
         versionText=valueText(13);
         root.addView(compactCard("版本 / 網路",versionText));
         return root;
@@ -448,7 +469,10 @@ public class MainActivity extends Activity {
     private void refreshSettings(){
         boolean signed=new CodexClient(this).signedIn();
         settingsAccount.setText(signed?"已登入":"尚未登入");
-        exactAlarmText.setText(Scheduler.canExact(this)?"已允許；Doze 下可使用 exact alarm":"尚未允許，排程可能延後");
+        PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
+        boolean ignoringDoze=pm!=null && pm.isIgnoringBatteryOptimizations(getPackageName());
+        exactAlarmText.setText((Scheduler.canExact(this)?"Exact Alarm 已允許":"Exact Alarm 尚未允許")+
+                " · Doze 白名單："+(ignoringDoze?"是":"否"));
         if(ntfyEdit!=null&&!ntfyEdit.hasFocus()){
             ntfySavedValue=Scheduler.prefs(this).getString(Scheduler.KEY_NTFY,DEFAULT_NTFY);
             ntfyEdit.setText(ntfySavedValue);
@@ -986,6 +1010,22 @@ public class MainActivity extends Activity {
         Button b=smallButton(text);
         b.setTextColor(Color.rgb(35,38,44));
         return b;
+    }
+
+    private void openSamsungNeverSleep(){
+        try{
+            Intent i=new Intent("com.samsung.android.sm.ACTION_OPEN_CHECKABLE_LISTACTIVITY");
+            i.setPackage("com.samsung.android.lool");
+            i.putExtra("activity_type",2);
+            startActivity(i);
+        }catch(Exception samsung){
+            try{
+                Intent i=new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+                startActivity(i);
+            }catch(Exception e){
+                toast("無法開啟背景用量設定");
+            }
+        }
     }
 
     private void showPage(int i){
