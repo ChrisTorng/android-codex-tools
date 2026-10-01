@@ -12,6 +12,8 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.text.Editable;
 import android.text.TextWatcher;
@@ -58,7 +60,9 @@ public class MainActivity extends Activity {
     private TextView primaryPercent,primaryMeta;
     private TextView weeklyPercent,weeklyMeta;
     private QuotaProgressView primaryBar,weeklyBar;
-    private TextView scheduleSummary,lastEvent,manualTriggerPreview;
+    private TextView scheduleSummary,lastEvent,manualTriggerPreview,resetCreditsText;
+    private View resetCreditsRow;
+    private Button triggerButton,resetCreditsButton;
 
     private Spinner modeSpinner;
     private TextView nextAlarmText,previewText,weeklySummary,todaySummary,tomorrowSummary;
@@ -67,6 +71,15 @@ public class MainActivity extends Activity {
     private EditText ntfyEdit;
     private Button ntfySaveButton;
     private String ntfySavedValue="";
+    private final Handler foregroundHandler=new Handler(Looper.getMainLooper());
+    private volatile boolean quotaRefreshRunning=false;
+    private long lastAutoRefreshStarted=0;
+    private final Runnable periodicQuotaRefresh=new Runnable(){
+        @Override public void run(){
+            maybeAutoRefresh(false);
+            foregroundHandler.postDelayed(this,10*60_000L);
+        }
+    };
 
     @Override protected void onCreate(Bundle state){
         super.onCreate(state);
@@ -77,6 +90,14 @@ public class MainActivity extends Activity {
     @Override protected void onResume(){
         super.onResume();
         refreshAll();
+        maybeAutoRefresh(true);
+        foregroundHandler.removeCallbacks(periodicQuotaRefresh);
+        foregroundHandler.postDelayed(periodicQuotaRefresh,10*60_000L);
+    }
+
+    @Override protected void onPause(){
+        foregroundHandler.removeCallbacks(periodicQuotaRefresh);
+        super.onPause();
     }
 
     private void buildUi(){
@@ -160,12 +181,27 @@ public class MainActivity extends Activity {
 
         LinearLayout actions=new LinearLayout(this);
         Button check=actionButton("更新配額");
-        Button trigger=actionButton("立即觸發");
+        triggerButton=actionButton("立即觸發");
         actions.addView(check,half(false));
-        actions.addView(trigger,half(true));
+        actions.addView(triggerButton,half(true));
         root.addView(actions,new LinearLayout.LayoutParams(-1,dp(48)));
         check.setOnClickListener(v->runCheck());
-        trigger.setOnClickListener(v->confirmTrigger());
+        triggerButton.setOnClickListener(v->confirmTrigger());
+
+        resetCreditsRow=new LinearLayout(this);
+        ((LinearLayout)resetCreditsRow).setOrientation(LinearLayout.HORIZONTAL);
+        ((LinearLayout)resetCreditsRow).setGravity(Gravity.CENTER_VERTICAL);
+        ((LinearLayout)resetCreditsRow).setPadding(dp(10),dp(4),dp(6),dp(4));
+        resetCreditsRow.setBackground(roundRect(Color.rgb(255,248,232),dp(12),Color.rgb(231,183,82)));
+        resetCreditsText=valueText(12);
+        ((LinearLayout)resetCreditsRow).addView(resetCreditsText,new LinearLayout.LayoutParams(0,dp(40),1));
+        resetCreditsButton=smallButton("使用 Reset");
+        ((LinearLayout)resetCreditsRow).addView(resetCreditsButton,new LinearLayout.LayoutParams(dp(104),dp(40)));
+        resetCreditsButton.setOnClickListener(v->confirmReset());
+        resetCreditsRow.setVisibility(View.GONE);
+        LinearLayout.LayoutParams resetLp=new LinearLayout.LayoutParams(-1,dp(48));
+        resetLp.setMargins(0,dp(3),0,dp(3));
+        root.addView(resetCreditsRow,resetLp);
 
         LinearLayout eventsCard=new LinearLayout(this);
         eventsCard.setOrientation(LinearLayout.VERTICAL);
@@ -323,7 +359,7 @@ public class MainActivity extends Activity {
         if(q.primaryActive && q.primaryConfirmed){
             primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
             double pace=pace(now,q.primaryResetMs,5*60*60_000L);
-            primaryBar.setProgress(q.primaryUsed,pace);
+            primaryBar.setProgress(q.primaryUsed,pace,elapsedLabel(now,q.primaryResetMs,5*60*60_000L));
             primaryMeta.setText(String.format(Locale.TAIWAN,
                     "已確認啟動 · 時間進度 %.0f%% · reset %s",
                     pace,Scheduler.formatTime(q.primaryResetMs)));
@@ -340,7 +376,7 @@ public class MainActivity extends Activity {
         if(q.secondaryActive){
             weeklyPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.secondaryUsed));
             double pace=pace(now,q.secondaryResetMs,7*24*60*60_000L);
-            weeklyBar.setProgress(q.secondaryUsed,pace);
+            weeklyBar.setProgress(q.secondaryUsed,pace,elapsedLabel(now,q.secondaryResetMs,7*24*60*60_000L));
             weeklyMeta.setText(String.format(Locale.TAIWAN,
                     "時間進度 %.0f%%  ·  reset %s",pace,Scheduler.formatTime(q.secondaryResetMs)));
         }else{
@@ -354,12 +390,24 @@ public class MainActivity extends Activity {
                 Scheduler.MODE_CUSTOM.equals(mode)?"錨點＋接續":"已關閉";
         scheduleSummary.setText(modeName+"\n"+Scheduler.formattedNext(this));
 
-        if(q.primaryConfirmed && q.primaryResetMs>now){
-            manualTriggerPreview.setText("現在立即觸發不會延長 5h 視窗 · 仍於 "+
-                    Scheduler.formatTime(q.primaryResetMs)+" reset");
+        boolean activeConfirmed=q.primaryConfirmed && q.primaryResetMs>now;
+        triggerButton.setEnabled(!activeConfirmed);
+        if(activeConfirmed){
+            manualTriggerPreview.setText("5h 視窗進行中 · 下一次可重新開始：約 "+
+                    Scheduler.formatTime(q.primaryResetMs));
         }else{
             manualTriggerPreview.setText("若現在觸發成功 · 預估 reset "+
                     Scheduler.formatTime(now+5*60*60_000L));
+        }
+
+        boolean resetEligible=Scheduler.resetEligibleNow(this);
+        if(resetEligible && q.resetAvailableCount>0 &&
+                q.resetCreditId!=null && !q.resetCreditId.isEmpty()){
+            resetCreditsRow.setVisibility(View.VISIBLE);
+            String expiry=q.resetExpires==null||q.resetExpires.isEmpty()?"":(" · 到期 "+formatIsoTime(q.resetExpires));
+            resetCreditsText.setText("Banked reset "+q.resetAvailableCount+" 次可用"+expiry);
+        }else{
+            resetCreditsRow.setVisibility(View.GONE);
         }
 
         lastEvent.setText(Scheduler.history(this));
@@ -614,15 +662,72 @@ public class MainActivity extends Activity {
 
     private void runCheck(){
         toast("正在更新…");
+        if(quotaRefreshRunning)return;
+        quotaRefreshRunning=true;
+        lastAutoRefreshStarted=System.currentTimeMillis();
         new Thread(()->{
-            Scheduler.checkNow(getApplicationContext());
-            runOnUiThread(this::refreshAll);
+            try{Scheduler.checkNow(getApplicationContext(),true);}
+            finally{
+                quotaRefreshRunning=false;
+                runOnUiThread(this::refreshAll);
+            }
         },"codex-check").start();
+    }
+
+    private void maybeAutoRefresh(boolean enteringScreen){
+        if(!new CodexClient(this).signedIn()||quotaRefreshRunning)return;
+        long now=System.currentTimeMillis();
+        long minGap=enteringScreen?30_000L:10*60_000L;
+        if(now-lastAutoRefreshStarted<minGap)return;
+        quotaRefreshRunning=true;
+        lastAutoRefreshStarted=now;
+        new Thread(()->{
+            try{Scheduler.checkNow(getApplicationContext(),false);}
+            finally{
+                quotaRefreshRunning=false;
+                runOnUiThread(this::refreshAll);
+            }
+        },"codex-auto-refresh").start();
+    }
+
+    private void confirmReset(){
+        Scheduler.Snapshot q=Scheduler.snapshot(this);
+        if(!Scheduler.resetEligibleNow(this)){
+            toast("5 小時與週配額都尚未用盡");
+            return;
+        }
+        if(q.resetAvailableCount<=0||q.resetCreditId==null||q.resetCreditId.isEmpty()){
+            toast("目前沒有可用的 banked reset");
+            return;
+        }
+        String title=q.resetTitle==null||q.resetTitle.isEmpty()?"Full reset":q.resetTitle;
+        String detail=q.resetDescription==null?"":q.resetDescription;
+        String expiry=q.resetExpires==null||q.resetExpires.isEmpty()?"":"\n到期："+formatIsoTime(q.resetExpires);
+        new AlertDialog.Builder(this)
+                .setTitle("使用 "+title+"？")
+                .setMessage("這會消耗 1 個 banked reset。只有 5 小時或週配額已用盡時才會執行；完成後 App 會重新查詢實際 quota，不會自動送 Codex request。"+
+                        (detail.isEmpty()?"":"\n\n"+detail)+expiry)
+                .setNegativeButton("取消",null)
+                .setPositiveButton("使用 Reset",(d,w)->{
+                    resetCreditsButton.setEnabled(false);
+                    toast("正在 Reset…");
+                    new Thread(()->{
+                        Scheduler.consumeResetCredit(getApplicationContext());
+                        runOnUiThread(()->{
+                            resetCreditsButton.setEnabled(true);
+                            refreshAll();
+                        });
+                    },"codex-reset").start();
+                }).show();
     }
 
     private void confirmTrigger(){
         Scheduler.Snapshot q=Scheduler.snapshot(this);
         long now=System.currentTimeMillis();
+        if(q.primaryConfirmed && q.primaryResetMs>now){
+            toast("5 小時視窗仍在進行中");
+            return;
+        }
         String timing=(q.primaryConfirmed && q.primaryResetMs>now)
                 ?"目前 5 小時視窗已啟動，這次 request 不會延長視窗。\n目前 reset："+Scheduler.formatTime(q.primaryResetMs)
                 :"若觸發成功，預估 reset："+Scheduler.formatTime(now+5*60*60_000L);
@@ -679,6 +784,27 @@ public class MainActivity extends Activity {
         },"codex-oauth").start();
     }
 
+    private String elapsedLabel(long now,long reset,long duration){
+        long start=reset-duration;
+        long elapsed=Math.max(0,Math.min(duration,now-start));
+        if(duration>=24*60*60_000L){
+            long days=elapsed/(24*60*60_000L);
+            long hours=(elapsed%(24*60*60_000L))/(60*60_000L);
+            return days>0?days+"天 "+hours+"h":hours+"h";
+        }
+        long hours=elapsed/(60*60_000L);
+        long mins=(elapsed%(60*60_000L))/60_000L;
+        return hours+"h "+mins+"m";
+    }
+
+    private String formatIsoTime(String iso){
+        try{
+            return Scheduler.formatTime(java.time.Instant.parse(iso).toEpochMilli());
+        }catch(Exception e){
+            return iso;
+        }
+    }
+
     private double pace(long now,long reset,long duration){
         long start=reset-duration;
         if(reset<=0||duration<=0)return -1;
@@ -701,14 +827,14 @@ public class MainActivity extends Activity {
         top.addView(percent,new LinearLayout.LayoutParams(-2,dp(30)));
         box.addView(top);
 
-        box.addView(bar,new LinearLayout.LayoutParams(-1,dp(13)));
+        box.addView(bar,new LinearLayout.LayoutParams(-1,dp(29)));
 
         meta.setTextSize(12);
         meta.setTextColor(Color.rgb(95,100,110));
         meta.setPadding(0,dp(4),0,0);
         box.addView(meta,new LinearLayout.LayoutParams(-1,dp(34)));
 
-        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(88));
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(104));
         lp.setMargins(0,dp(3),0,dp(3));
         box.setLayoutParams(lp);
         return box;
