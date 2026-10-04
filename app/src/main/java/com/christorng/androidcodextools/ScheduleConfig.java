@@ -68,23 +68,12 @@ final class ScheduleConfig {
     static List<Rule> loadWeekly(Context c){
         String raw=Scheduler.prefs(c).getString(KEY_WEEKLY,null);
         if(raw!=null){
-            List<Rule> current=parseRules(raw,true);
-            if(looksLikeOldDefault(current)){
-                List<Rule> fixed=defaultDailyAnchors();
-                saveWeekly(c,fixed);
-                return fixed;
-            }
-            return current;
+            return parseRules(raw,true);
         }
 
         String legacy=Scheduler.prefs(c).getString("schedule_rules_v1",null);
         if(legacy!=null){
             List<Rule> migrated=parseRules(legacy,true);
-            if(looksLikeOldDefault(migrated)){
-                List<Rule> fixed=defaultDailyAnchors();
-                saveWeekly(c,fixed);
-                return fixed;
-            }
             if(!migrated.isEmpty())return migrated;
         }
         return defaultDailyAnchors();
@@ -232,19 +221,6 @@ final class ScheduleConfig {
             }
         }
         return conflicts;
-    }
-
-    private static boolean looksLikeOldDefault(List<Rule> rules){
-        if(rules==null||rules.size()!=4)return false;
-        int[] expected={8,13,18,23};
-        List<Rule> sorted=new ArrayList<>(rules);
-        sorted.sort(Comparator.comparingInt((Rule r)->r.hour).thenComparingInt(r->r.minute));
-        for(int i=0;i<4;i++){
-            Rule r=sorted.get(i);
-            if(!r.enabled||r.hour!=expected[i]||r.minute!=0||r.autoCount!=0)return false;
-            for(boolean d:r.days)if(!d)return false;
-        }
-        return true;
     }
 
     static String estimateRule(Rule r){
