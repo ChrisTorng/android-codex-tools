@@ -56,7 +56,6 @@ import java.util.Map;
 import java.util.Set;
 
 public class MainActivity extends Activity {
-    private static final String DEFAULT_NTFY="https://ntfy.sh/codex-8b7a238e0815ab41ffe56082eb6a7b21";
     private static final int ACCENT=Color.rgb(47,128,237);
 
     private View statusPage,schedulePage,settingsPage;
@@ -119,7 +118,7 @@ public class MainActivity extends Activity {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(16),dp(10),dp(10),dp(6));
         TextView title=new TextView(this);
-        title.setText("Codex 配額");
+        title.setText("Codex Tools");
         title.setTextSize(23);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(Color.rgb(30,34,40));
@@ -308,11 +307,28 @@ public class MainActivity extends Activity {
         root.addView(ntfyEdit,new LinearLayout.LayoutParams(-1,dp(50)));
 
         LinearLayout ntfyActions=new LinearLayout(this);
+        Button testNtfy=smallButton("測試通知");
         Button copyNtfy=smallButton("複製");
         ntfySaveButton=smallButton("儲存");
-        ntfyActions.addView(copyNtfy,half(false));
-        ntfyActions.addView(ntfySaveButton,half(true));
+        ntfyActions.addView(testNtfy,new LinearLayout.LayoutParams(0,dp(42),1));
+        ntfyActions.addView(copyNtfy,new LinearLayout.LayoutParams(0,dp(42),1));
+        ntfyActions.addView(ntfySaveButton,new LinearLayout.LayoutParams(0,dp(42),1));
         root.addView(ntfyActions,new LinearLayout.LayoutParams(-1,dp(44)));
+
+        TextView ntfyStatus=valueText(12);
+        ntfyStatus.setText("最近發送："+Scheduler.ntfyLastStatus(this));
+        root.addView(ntfyStatus,new LinearLayout.LayoutParams(-1,dp(34)));
+
+        testNtfy.setOnClickListener(v->{
+            toast("正在送測試通知…");
+            new Thread(()->{
+                Scheduler.testNtfy(getApplicationContext());
+                runOnUiThread(()->{
+                    ntfyStatus.setText("最近發送："+Scheduler.ntfyLastStatus(this));
+                    toast(Scheduler.ntfyLastStatus(this));
+                });
+            },"ntfy-test").start();
+        });
 
         copyNtfy.setOnClickListener(v->{
             String value=ntfyEdit.getText().toString().trim();
@@ -338,14 +354,14 @@ public class MainActivity extends Activity {
 
         exactAlarmText=valueText(14);
         Button exact=actionButton("精準鬧鐘設定");
-        root.addView(summaryEditorCard("Android Alarm",exactAlarmText,exact));
+        root.addView(summaryEditorCard("精準鬧鐘",exactAlarmText,exact));
         exact.setOnClickListener(v->{
             try{startActivity(Scheduler.exactSettings(this));}
             catch(Exception e){toast("無法開啟系統設定");}
         });
 
         TextView backgroundHelp=bodyText(
-                "Samsung 可能限制休眠 App 的 Alarm / Job。建議把 Android Codex Tools 加到「永不自動進入休眠」，並確認 App 電池設定不是「受限制」。");
+                "Samsung 可能限制休眠 App 的 Alarm / Job。建議把 Codex Tools 加到「永不自動進入休眠」，並確認 App 電池設定不是「受限制」。");
         root.addView(compactCard("背景執行",backgroundHelp));
 
         LinearLayout batteryRow=new LinearLayout(this);
@@ -387,15 +403,13 @@ public class MainActivity extends Activity {
             primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
             double pace=pace(now,q.primaryResetMs,5*60*60_000L);
             primaryBar.setProgress(q.primaryUsed,pace,
-                    elapsedLabel(now,q.primaryResetMs,5*60*60_000L),
+                    String.format(Locale.TAIWAN,"%.0f%%",pace),
                     hourTicks(q.primaryResetMs,5*60*60_000L));
-            primaryMeta.setText(String.format(Locale.TAIWAN,
-                    "已確認啟動 · 時間進度 %.0f%% · reset %s",
-                    pace,Scheduler.formatTime(q.primaryResetMs)));
+            primaryMeta.setText("重置 "+Scheduler.formatTime(q.primaryResetMs));
         }else if(q.primaryActive){
             primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
             primaryBar.setProgress(q.primaryUsed,-1);
-            primaryMeta.setText("尚未確認啟動 · 查詢顯示約 "+Scheduler.formatTime(q.primaryResetMs)+"（會滑動）");
+            primaryMeta.setText("尚未啟動 · 查詢約 "+Scheduler.formatTime(q.primaryResetMs));
         }else{
             primaryPercent.setText("—");
             primaryBar.setProgress(0,-1);
@@ -406,10 +420,9 @@ public class MainActivity extends Activity {
             weeklyPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.secondaryUsed));
             double pace=pace(now,q.secondaryResetMs,7*24*60*60_000L);
             weeklyBar.setProgress(q.secondaryUsed,pace,
-                    elapsedLabel(now,q.secondaryResetMs,7*24*60*60_000L),
+                    String.format(Locale.TAIWAN,"%.0f%%",pace),
                     midnightTicks(q.secondaryResetMs,7*24*60*60_000L));
-            weeklyMeta.setText(String.format(Locale.TAIWAN,
-                    "時間進度 %.0f%%  ·  reset %s",pace,Scheduler.formatTime(q.secondaryResetMs)));
+            weeklyMeta.setText("重置 "+Scheduler.formatTime(q.secondaryResetMs));
         }else{
             weeklyPercent.setText("—");
             weeklyBar.setProgress(0,-1);
@@ -474,7 +487,7 @@ public class MainActivity extends Activity {
         exactAlarmText.setText((Scheduler.canExact(this)?"Exact Alarm 已允許":"Exact Alarm 尚未允許")+
                 " · Doze 白名單："+(ignoringDoze?"是":"否"));
         if(ntfyEdit!=null&&!ntfyEdit.hasFocus()){
-            ntfySavedValue=Scheduler.prefs(this).getString(Scheduler.KEY_NTFY,DEFAULT_NTFY);
+            ntfySavedValue=Scheduler.ntfyUrl(this);
             ntfyEdit.setText(ntfySavedValue);
             if(ntfySaveButton!=null)ntfySaveButton.setEnabled(false);
         }
@@ -806,7 +819,7 @@ public class MainActivity extends Activity {
                     code=q.get("code");
                     if(code==null||!(p.state.equals(state)||(p.state+".onboarding_entrypoint=life_sciences").equals(state)))
                         throw new IllegalStateException("OAuth state/code mismatch");
-                    writeHtml(socket,"<h2>Authorization received</h2><p>可以回到 Android Codex Tools。</p>");
+                    writeHtml(socket,"<h2>Authorization received</h2><p>可以回到 Codex Tools。</p>");
                 }
 
                 Scheduler.note(this,"已收到授權，正在取得 token…");
@@ -902,10 +915,11 @@ public class MainActivity extends Activity {
 
         meta.setTextSize(12);
         meta.setTextColor(Color.rgb(95,100,110));
-        meta.setPadding(0,dp(4),0,0);
-        box.addView(meta,new LinearLayout.LayoutParams(-1,dp(34)));
+        meta.setSingleLine(true);
+        meta.setPadding(0,dp(2),0,0);
+        box.addView(meta,new LinearLayout.LayoutParams(-1,dp(22)));
 
-        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(104));
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(92));
         lp.setMargins(0,dp(3),0,dp(3));
         box.setLayoutParams(lp);
         return box;
