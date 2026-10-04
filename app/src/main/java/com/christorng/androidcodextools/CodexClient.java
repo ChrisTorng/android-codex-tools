@@ -199,6 +199,30 @@ final class CodexClient {
         return new ResetResult(root.optString("code","unknown"),root.optInt("windows_reset",0));
     }
 
+    void sendNtfy(String topicUrl,String title,String message) throws Exception {
+        HttpUrl topic=HttpUrl.get(topicUrl);
+        List<String> segments=topic.pathSegments();
+        String topicName="";
+        for(int i=segments.size()-1;i>=0;i--){
+            String s=segments.get(i);
+            if(s!=null&&!s.isEmpty()){topicName=s;break;}
+        }
+        if(topicName.isEmpty())throw new IllegalArgumentException("ntfy topic URL 缺少 topic");
+
+        HttpUrl root=topic.newBuilder().encodedPath("/").build();
+        JSONObject payload=new JSONObject()
+                .put("topic",topicName)
+                .put("title",title)
+                .put("message",message);
+        RequestBody body=RequestBody.create(payload.toString(),MediaType.get("application/json; charset=utf-8"));
+        Request request=new Request.Builder()
+                .url(root)
+                .header("Accept","application/json")
+                .post(body)
+                .build();
+        executeText(request);
+    }
+
     int triggerMinimal() throws Exception {
         JSONObject root=new JSONObject();
         root.put("model","gpt-5.6-luna").put("store",false).put("stream",true).put("instructions","Reply .");
