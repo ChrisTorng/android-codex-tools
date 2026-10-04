@@ -27,6 +27,8 @@ import java.util.Locale;
 final class Scheduler {
     static final String PREFS="app";
     static final String KEY_NTFY="ntfy_url";
+    static final String DEFAULT_NTFY="https://ntfy.sh/codex-8b7a238e0815ab41ffe56082eb6a7b21";
+    private static final String KEY_NTFY_LAST="ntfy_last_status";
     static final String KEY_LAST="last_status";
     private static final String KEY_HISTORY="event_history_v1";
     static final String KEY_NEXT="next_alarm_ms";
@@ -183,6 +185,17 @@ final class Scheduler {
     }
     static long next(Context c){return prefs(c).getLong(KEY_NEXT,0);}
     static String nextReason(Context c){return prefs(c).getString(KEY_NEXT_REASON,"");}
+    static String ntfyUrl(Context c){
+        String value=prefs(c).getString(KEY_NTFY,DEFAULT_NTFY);
+        if(value==null||value.trim().isEmpty())return DEFAULT_NTFY;
+        return value.trim();
+    }
+    static String ntfyLastStatus(Context c){
+        return prefs(c).getString(KEY_NTFY_LAST,"尚未測試");
+    }
+    static void testNtfy(Context c){
+        notifyNtfy(c,"Codex Tools 測試","ntfy 通知測試成功");
+    }
     static String lastAlarmReceived(Context c){return prefs(c).getString(KEY_LAST_ALARM_RECEIVED,"—");}
     static String lastBackupReceived(Context c){return prefs(c).getString(KEY_LAST_BACKUP_RECEIVED,"—");}
     static void markAlarmReceived(Context c){
@@ -741,20 +754,16 @@ final class Scheduler {
     }
 
     private static void notifyNtfy(Context c,String title,String body){
-        String u=prefs(c).getString(KEY_NTFY,"").trim();
-        if(u.isEmpty())return;
+        String u=ntfyUrl(c);
         try{
-            byte[] b=body.getBytes(StandardCharsets.UTF_8);
-            HttpURLConnection h=(HttpURLConnection)new URL(u).openConnection();
-            h.setRequestMethod("POST");
-            h.setDoOutput(true);
-            h.setConnectTimeout(10_000);
-            h.setReadTimeout(10_000);
-            h.setRequestProperty("Title",title);
-            h.setFixedLengthStreamingMode(b.length);
-            try(OutputStream os=h.getOutputStream()){os.write(b);}
-            h.getResponseCode();
-            h.disconnect();
-        }catch(Exception ignored){}
+            new CodexClient(c).sendNtfy(u,title,body);
+            prefs(c).edit().putString(KEY_NTFY_LAST,
+                    formatTime(System.currentTimeMillis())+" · 已送出").apply();
+        }catch(Exception e){
+            String msg="ntfy 發送失敗: "+safe(e);
+            prefs(c).edit().putString(KEY_NTFY_LAST,
+                    formatTime(System.currentTimeMillis())+" · "+msg).apply();
+            note(c,msg);
+        }
     }
 }
