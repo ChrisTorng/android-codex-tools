@@ -682,22 +682,29 @@ public class MainActivity extends Activity {
         Button add=actionButton("＋ 新增錨點");
         container.addView(add,new LinearLayout.LayoutParams(-1,dp(46)));
 
-        Runnable redraw=()->renderRuleRows(list,draft.rules,false,null);
-        redraw.run();
+        final Runnable[] redraw={null};
+        redraw[0]=()->{
+            renderRuleRows(list,draft.rules,false,redraw[0]);
+            updateSuggestedAddButton(add,draft.rules,false,draft.enabled);
+        };
+        redraw[0].run();
         add.setOnClickListener(v->{
-            ScheduleConfig.Rule r=new ScheduleConfig.Rule();
-            r.hour=9;
-            r.minute=0;
+            ScheduleConfig.Rule r=ScheduleConfig.suggestedNewRule(draft.rules,false);
+            if(r==null){
+                toast("當天已沒有可容納完整 5 小時視窗的新錨點");
+                updateSuggestedAddButton(add,draft.rules,false,draft.enabled);
+                return;
+            }
             draft.rules.add(r);
-            redraw.run();
+            redraw[0].run();
         });
         override.setOnCheckedChangeListener((b,checked)->{
             draft.enabled=checked;
             list.setAlpha(checked?1f:0.4f);
-            add.setEnabled(checked);
+            updateSuggestedAddButton(add,draft.rules,false,checked);
         });
         list.setAlpha(draft.enabled?1f:0.4f);
-        add.setEnabled(draft.enabled);
+        updateSuggestedAddButton(add,draft.rules,false,draft.enabled);
 
         ScrollView scroll=scroll(container);
         new AlertDialog.Builder(this)
@@ -725,9 +732,22 @@ public class MainActivity extends Activity {
         container.addView(list);
         Button add=actionButton("＋ 新增錨點");
         container.addView(add,new LinearLayout.LayoutParams(-1,dp(46)));
-        Runnable redraw=()->renderRuleRows(list,draft,weekly,null);
-        redraw.run();
-        add.setOnClickListener(v->{draft.add(new ScheduleConfig.Rule());redraw.run();});
+        final Runnable[] redraw={null};
+        redraw[0]=()->{
+            renderRuleRows(list,draft,weekly,redraw[0]);
+            updateSuggestedAddButton(add,draft,weekly,true);
+        };
+        redraw[0].run();
+        add.setOnClickListener(v->{
+            ScheduleConfig.Rule r=ScheduleConfig.suggestedNewRule(draft,weekly);
+            if(r==null){
+                toast("目前排程已沒有可容納完整 5 小時視窗的新錨點");
+                updateSuggestedAddButton(add,draft,weekly,true);
+                return;
+            }
+            draft.add(r);
+            redraw[0].run();
+        });
 
         new AlertDialog.Builder(this)
                 .setTitle(title)
@@ -767,22 +787,41 @@ public class MainActivity extends Activity {
             Button time=smallButton(rule.timeText());
             time.setOnClickListener(v->new TimePickerDialog(this,(TimePicker p,int h,int m)->{
                 rule.hour=h;rule.minute=m;
-                renderRuleRows(list,rules,weekly,externalRedraw);
+                if(externalRedraw!=null)externalRedraw.run();
+                else renderRuleRows(list,rules,weekly,null);
             },rule.hour,rule.minute,true).show());
             row.addView(time,new LinearLayout.LayoutParams(dp(92),dp(44)));
 
             Spinner auto=new Spinner(this);
-            String[] counts={"不接續","+1","+2","+3","+4","+5","+6"};
-            auto.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,counts));
-            auto.setSelection(Math.min(rule.autoCount,6));
+            int maxAuto=ScheduleConfig.maxSafeAutoCount(rule,rules,weekly);
+            List<String> countLabels=new ArrayList<>();
+            countLabels.add("不接續");
+            for(int n=1;n<=maxAuto;n++)countLabels.add("接續 "+n);
+            ArrayAdapter<String> countAdapter=new ArrayAdapter<>(
+                    this,android.R.layout.simple_spinner_item,countLabels);
+            countAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            auto.setAdapter(countAdapter);
+            if(rule.autoCount>maxAuto)rule.autoCount=maxAuto;
+            auto.setSelection(Math.min(rule.autoCount,maxAuto));
             auto.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
-                @Override public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){rule.autoCount=pos;}
+                boolean initial=true;
+                @Override public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){
+                    if(rule.autoCount!=pos){
+                        rule.autoCount=pos;
+                        if(!initial && externalRedraw!=null)externalRedraw.run();
+                    }
+                    initial=false;
+                }
                 @Override public void onNothingSelected(android.widget.AdapterView<?> p){}
             });
-            row.addView(auto,new LinearLayout.LayoutParams(dp(88),dp(44)));
+            row.addView(auto,new LinearLayout.LayoutParams(dp(112),dp(44)));
 
             Button del=smallButton("×");
-            del.setOnClickListener(v->{rules.remove(rule);renderRuleRows(list,rules,weekly,externalRedraw);});
+            del.setOnClickListener(v->{
+                rules.remove(rule);
+                if(externalRedraw!=null)externalRedraw.run();
+                else renderRuleRows(list,rules,weekly,null);
+            });
             row.addView(del,new LinearLayout.LayoutParams(dp(46),dp(44)));
             card.addView(row);
 
@@ -801,7 +840,8 @@ public class MainActivity extends Activity {
                     t.setChecked(rule.days[i]);
                     t.setOnCheckedChangeListener((b,v)->{
                         rule.days[day]=v;
-                        renderRuleRows(list,rules,weekly,externalRedraw);
+                        if(externalRedraw!=null)externalRedraw.run();
+                        else renderRuleRows(list,rules,weekly,null);
                     });
                     days.addView(t,new LinearLayout.LayoutParams(0,dp(40),1));
                 }
@@ -818,6 +858,23 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
             lp.setMargins(0,dp(4),0,dp(4));
             list.addView(card,lp);
+        }
+    }
+
+    private void updateSuggestedAddButton(Button add,List<ScheduleConfig.Rule> rules,
+                                          boolean weekly,boolean editorEnabled){
+        if(!editorEnabled){
+            add.setEnabled(false);
+            add.setText("＋ 新增錨點");
+            return;
+        }
+        ScheduleConfig.Rule suggested=ScheduleConfig.suggestedNewRule(rules,weekly);
+        if(suggested==null){
+            add.setEnabled(false);
+            add.setText("已無可新增錨點");
+        }else{
+            add.setEnabled(true);
+            add.setText("＋ 新增錨點 · 建議 "+suggested.timeText());
         }
     }
 
