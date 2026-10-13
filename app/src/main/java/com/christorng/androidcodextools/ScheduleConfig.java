@@ -27,7 +27,7 @@ final class ScheduleConfig {
         String id=UUID.randomUUID().toString();
         boolean enabled=true;
         final boolean[] days={true,true,true,true,true,true,true};
-        int hour=9;
+        int hour=6;
         int minute=0;
         int autoCount=0;
 
@@ -81,15 +81,12 @@ final class ScheduleConfig {
 
     private static List<Rule> defaultDailyAnchors(){
         List<Rule> out=new ArrayList<>();
-        int[] hours={9,13,18,23};
-        for(int h:hours){
-            Rule r=new Rule();
-            r.hour=h;
-            r.minute=0;
-            r.autoCount=0;
-            for(int i=0;i<7;i++)r.days[i]=true;
-            out.add(r);
-        }
+        Rule r=new Rule();
+        r.hour=6;
+        r.minute=0;
+        r.autoCount=3;
+        for(int i=0;i<7;i++)r.days[i]=true;
+        out.add(r);
         return out;
     }
 
@@ -174,49 +171,151 @@ final class ScheduleConfig {
         return out;
     }
 
+    static int maxSafeAutoCount(Rule target,List<Rule> rules,boolean weekly){
+        if(target==null||!target.enabled)return 0;
+        int minGapMinutes=Integer.MAX_VALUE;
+
+        if(weekly){
+            List<Integer> anchors=new ArrayList<>();
+            for(Rule r:rules){
+                if(!r.enabled)continue;
+                for(int d=0;d<7;d++){
+                    if(r.days[d])anchors.add(d*1440+r.hour*60+r.minute);
+                }
+            }
+            int week=7*1440;
+            for(int d=0;d<7;d++){
+                if(!target.days[d])continue;
+                int t=d*1440+target.hour*60+target.minute;
+                int next=Integer.MAX_VALUE;
+                for(int a:anchors){
+                    int delta=a-t;
+                    if(delta<=0)delta+=week;
+                    if(delta<next)next=delta;
+                }
+                if(next<minGapMinutes)minGapMinutes=next;
+            }
+        }else{
+            List<Integer> anchors=new ArrayList<>();
+            for(Rule r:rules){
+                if(r.enabled)anchors.add(r.hour*60+r.minute);
+            }
+            int t=target.hour*60+target.minute;
+            int next=Integer.MAX_VALUE;
+            for(int a:anchors){
+                int delta=a-t;
+                if(delta<=0)delta+=1440;
+                if(delta<next)next=delta;
+            }
+            minGapMinutes=next;
+        }
+
+        if(minGapMinutes==Integer.MAX_VALUE)return 3;
+        // Each continuation starts 5h later and creates another 5h window.
+        // An anchor exactly at the previous window's reset is allowed because
+        // runtime logic can wait through the small reset tolerance.
+        return Math.max(0,Math.min(6,(minGapMinutes/300)-1));
+    }
+
+    static Rule suggestedNewRule(List<Rule> rules,boolean weekly){
+        Rule candidate=new Rule();
+        candidate.autoCount=0;
+        for(int i=0;i<7;i++)candidate.days[i]=true;
+
+        // Search 5-minute slots. A candidate is acceptable only if it stays
+        // at least 5 hours away from every existing anchor/continuation.
+        for(int minute=0;minute<1440;minute+=5){
+            int h=minute/60, m=minute%60;
+            if(isFeasibleStart(h,m,rules,weekly)){
+                candidate.hour=h;
+                candidate.minute=m;
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isFeasibleStart(int hour,int minute,List<Rule> rules,boolean weekly){
+        if(rules==null||rules.isEmpty())return true;
+        int period=weekly?7*1440:1440;
+        List<Integer> starts=new ArrayList<>();
+
+        if(weekly){
+            for(Rule r:rules){
+                if(!r.enabled)continue;
+                for(int d=0;d<7;d++){
+                    if(!r.days[d])continue;
+                    int base=d*1440+r.hour*60+r.minute;
+                    for(int i=0;i<=r.autoCount;i++){
+                        starts.add((base+i*300)%period);
+                    }
+                }
+            }
+            for(int d=0;d<7;d++){
+                int cand=d*1440+hour*60+minute;
+                for(int s:starts){
+                    int diff=Math.abs(cand-s);
+                    diff=Math.min(diff,period-diff);
+                    if(diff<300)return false;
+                }
+            }
+        }else{
+            for(Rule r:rules){
+                if(!r.enabled)continue;
+                int base=r.hour*60+r.minute;
+                for(int i=0;i<=r.autoCount;i++){
+                    starts.add((base+i*300)%period);
+                }
+            }
+            int cand=hour*60+minute;
+            for(int s:starts){
+                int diff=Math.abs(cand-s);
+                diff=Math.min(diff,period-diff);
+                if(diff<300)return false;
+            }
+        }
+        return true;
+    }
+
     static Set<String> conflictingRuleIds(List<Rule> rules,boolean weekly){
         Set<String> conflicts=new LinkedHashSet<>();
-        if(rules==null||rules.size()<2)return conflicts;
+        if(rules==null||rules.isEmpty())return conflicts;
+        for(Rule r:rules){
+            int max=maxSafeAutoCount(r,rules,weekly);
+            if(r.autoCount>max)conflicts.add(r.id);
+        }
 
         class Occurrence {
             final Rule rule;
             final int minute;
             Occurrence(Rule r,int m){rule=r;minute=m;}
         }
-
         List<Occurrence> occurrences=new ArrayList<>();
-        if(weekly){
-            for(Rule r:rules){
-                if(!r.enabled)continue;
+        int period=weekly?7*1440:1440;
+        for(Rule r:rules){
+            if(!r.enabled)continue;
+            if(weekly){
                 for(int d=0;d<7;d++){
-                    if(r.days[d])occurrences.add(new Occurrence(r,d*1440+r.hour*60+r.minute));
+                    if(!r.days[d])continue;
+                    int base=d*1440+r.hour*60+r.minute;
+                    for(int i=0;i<=r.autoCount;i++)
+                        occurrences.add(new Occurrence(r,(base+i*300)%period));
                 }
+            }else{
+                int base=r.hour*60+r.minute;
+                for(int i=0;i<=r.autoCount;i++)
+                    occurrences.add(new Occurrence(r,(base+i*300)%period));
             }
-            int week=7*1440;
-            for(int i=0;i<occurrences.size();i++){
-                for(int j=i+1;j<occurrences.size();j++){
-                    Occurrence a=occurrences.get(i),b=occurrences.get(j);
-                    if(a.rule.id.equals(b.rule.id))continue;
-                    int diff=Math.abs(a.minute-b.minute);
-                    diff=Math.min(diff,week-diff);
-                    if(diff>0&&diff<300){
-                        conflicts.add(a.rule.id);
-                        conflicts.add(b.rule.id);
-                    }
-                }
-            }
-        }else{
-            for(Rule r:rules){
-                if(r.enabled)occurrences.add(new Occurrence(r,r.hour*60+r.minute));
-            }
-            for(int i=0;i<occurrences.size();i++){
-                for(int j=i+1;j<occurrences.size();j++){
-                    Occurrence a=occurrences.get(i),b=occurrences.get(j);
-                    int diff=Math.abs(a.minute-b.minute);
-                    if(diff>0&&diff<300){
-                        conflicts.add(a.rule.id);
-                        conflicts.add(b.rule.id);
-                    }
+        }
+        for(int i=0;i<occurrences.size();i++){
+            for(int j=i+1;j<occurrences.size();j++){
+                Occurrence a=occurrences.get(i),b=occurrences.get(j);
+                if(a.rule.id.equals(b.rule.id))continue;
+                int diff=Math.abs(a.minute-b.minute);
+                diff=Math.min(diff,period-diff);
+                if(diff<300){
+                    conflicts.add(a.rule.id);
+                    conflicts.add(b.rule.id);
                 }
             }
         }
