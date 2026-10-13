@@ -95,6 +95,10 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         darkMode=resolveDarkMode();
         setTheme(darkMode?android.R.style.Theme_Material_NoActionBar:android.R.style.Theme_Material_Light_NoActionBar);
+        getWindow().setStatusBarColor(pageBg());
+        getWindow().setNavigationBarColor(pageBg());
+        getWindow().getDecorView().setSystemUiVisibility(darkMode?0:
+                (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));
         buildUi();
         refreshAll();
     }
@@ -210,7 +214,10 @@ public class MainActivity extends Activity {
         ((LinearLayout)resetCreditsRow).setOrientation(LinearLayout.HORIZONTAL);
         ((LinearLayout)resetCreditsRow).setGravity(Gravity.CENTER_VERTICAL);
         ((LinearLayout)resetCreditsRow).setPadding(dp(10),dp(4),dp(6),dp(4));
-        resetCreditsRow.setBackground(roundRect(Color.rgb(255,248,232),dp(12),Color.rgb(231,183,82)));
+        resetCreditsRow.setBackground(roundRect(
+                darkMode?Color.rgb(68,58,34):Color.rgb(255,248,232),
+                dp(12),
+                darkMode?Color.rgb(174,133,54):Color.rgb(231,183,82)));
         resetCreditsText=valueText(12);
         ((LinearLayout)resetCreditsRow).addView(resetCreditsText,new LinearLayout.LayoutParams(0,dp(40),1));
         resetCreditsButton=smallButton("使用 Reset");
@@ -743,9 +750,9 @@ public class MainActivity extends Activity {
             card.setPadding(dp(10),dp(8),dp(10),dp(8));
             boolean conflict=conflicts.contains(rule.id);
             card.setBackground(roundRect(
-                    conflict?Color.rgb(255,247,232):Color.WHITE,
+                    conflict?(darkMode?Color.rgb(68,54,32):Color.rgb(255,247,232)):cardBg(),
                     dp(12),
-                    conflict?Color.rgb(230,149,45):Color.rgb(220,224,230)));
+                    conflict?Color.rgb(230,149,45):borderColor()));
 
             LinearLayout row=new LinearLayout(this);
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -803,7 +810,7 @@ public class MainActivity extends Activity {
             TextView estimate=bodyText((conflict?"⚠ 5 小時內與其他錨點衝突 · ":"預估：")+
                     ScheduleConfig.estimateRule(rule));
             estimate.setTextSize(12);
-            if(conflict)estimate.setTextColor(Color.rgb(198,104,0));
+            if(conflict)estimate.setTextColor(warningText());
             estimate.setPadding(0,dp(2),0,0);
             card.addView(estimate);
 
@@ -1028,28 +1035,22 @@ public class MainActivity extends Activity {
     private View quotaCard(String title,TextView percent,QuotaProgressView bar,TextView meta){
         LinearLayout box=new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(12),dp(8),dp(12),dp(8));
-        box.setBackground(roundRect(Color.WHITE,dp(14),Color.rgb(224,227,232)));
+        box.setPadding(dp(12),dp(7),dp(12),dp(7));
+        box.setBackground(roundRect(cardBg(),dp(14),borderColor()));
 
         LinearLayout top=new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
         TextView label=sectionLabel(title);
-        top.addView(label,new LinearLayout.LayoutParams(0,dp(28),1));
+        top.addView(label,new LinearLayout.LayoutParams(0,dp(27),1));
         percent.setTextSize(22);
         percent.setTypeface(Typeface.DEFAULT_BOLD);
-        percent.setTextColor(Color.rgb(35,38,44));
-        top.addView(percent,new LinearLayout.LayoutParams(-2,dp(30)));
+        percent.setTextColor(textPrimary());
+        top.addView(percent,new LinearLayout.LayoutParams(-2,dp(29)));
         box.addView(top);
 
-        box.addView(bar,new LinearLayout.LayoutParams(-1,dp(29)));
+        box.addView(bar,new LinearLayout.LayoutParams(-1,dp(46)));
 
-        meta.setTextSize(12);
-        meta.setTextColor(Color.rgb(95,100,110));
-        meta.setSingleLine(true);
-        meta.setPadding(0,dp(2),0,0);
-        box.addView(meta,new LinearLayout.LayoutParams(-1,dp(22)));
-
-        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(92));
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(91));
         lp.setMargins(0,dp(3),0,dp(3));
         box.setLayoutParams(lp);
         return box;
@@ -1059,7 +1060,7 @@ public class MainActivity extends Activity {
         LinearLayout box=new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(11),dp(6),dp(11),dp(6));
-        box.setBackground(roundRect(Color.WHITE,dp(13),Color.rgb(224,227,232)));
+        box.setBackground(roundRect(cardBg(),dp(13),borderColor()));
         box.addView(sectionLabel(title));
         box.addView(value);
         LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
@@ -1072,7 +1073,7 @@ public class MainActivity extends Activity {
         LinearLayout box=new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(11),dp(8),dp(11),dp(8));
-        box.setBackground(roundRect(Color.WHITE,dp(13),Color.rgb(224,227,232)));
+        box.setBackground(roundRect(cardBg(),dp(13),borderColor()));
 
         LinearLayout top=new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
@@ -1094,7 +1095,7 @@ public class MainActivity extends Activity {
         t.setText(text);
         t.setTextSize(13);
         t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setTextColor(Color.rgb(85,90,100));
+        t.setTextColor(textSecondary());
         return t;
     }
 
@@ -1103,7 +1104,7 @@ public class MainActivity extends Activity {
         t.setText(text);
         t.setTextSize(17);
         t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setTextColor(Color.rgb(40,44,50));
+        t.setTextColor(textPrimary());
         t.setPadding(0,dp(6),0,dp(3));
         return t;
     }
@@ -1111,7 +1112,7 @@ public class MainActivity extends Activity {
     private TextView valueText(int size){
         TextView t=new TextView(this);
         t.setTextSize(size);
-        t.setTextColor(Color.rgb(35,38,44));
+        t.setTextColor(textPrimary());
         t.setLineSpacing(0,1.05f);
         return t;
     }
@@ -1119,7 +1120,7 @@ public class MainActivity extends Activity {
     private TextView bodyText(String text){
         TextView t=valueText(13);
         t.setText(text);
-        t.setTextColor(Color.rgb(85,90,100));
+        t.setTextColor(textSecondary());
         t.setPadding(0,dp(4),0,dp(6));
         return t;
     }
@@ -1133,7 +1134,7 @@ public class MainActivity extends Activity {
     }
 
     private void styleTab(Button b,boolean selected){
-        b.setTextColor(selected?Color.WHITE:Color.rgb(78,84,94));
+        b.setTextColor(selected?Color.WHITE:textSecondary());
         b.setBackground(roundRect(
                 selected?ACCENT:Color.TRANSPARENT,
                 dp(12),
@@ -1152,7 +1153,7 @@ public class MainActivity extends Activity {
 
     private Button actionButton(String text){
         Button b=smallButton(text);
-        b.setTextColor(Color.rgb(35,38,44));
+        b.setTextColor(textPrimary());
         return b;
     }
 
@@ -1175,12 +1176,58 @@ public class MainActivity extends Activity {
     private void showPage(int i){
         statusPage.setVisibility(i==0?View.VISIBLE:View.GONE);
         schedulePage.setVisibility(i==1?View.VISIBLE:View.GONE);
-        settingsPage.setVisibility(i==2?View.VISIBLE:View.GONE);
+        historyPage.setVisibility(i==2?View.VISIBLE:View.GONE);
+        settingsPage.setVisibility(i==3?View.VISIBLE:View.GONE);
         if(tabStatus!=null){
             styleTab(tabStatus,i==0);
             styleTab(tabSchedule,i==1);
-            styleTab(tabSettings,i==2);
+            styleTab(tabHistory,i==2);
+            styleTab(tabSettings,i==3);
         }
+    }
+
+    private boolean resolveDarkMode(){
+        String mode=Scheduler.prefs(this).getString("theme_mode","system");
+        if("dark".equals(mode))return true;
+        if("light".equals(mode))return false;
+        int night=getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        return night==Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    private int themeSelection(){
+        String mode=Scheduler.prefs(this).getString("theme_mode","system");
+        return "light".equals(mode)?1:"dark".equals(mode)?2:0;
+    }
+
+    private int sampleSelection(int minutes){
+        if(minutes>=60)return 3;
+        if(minutes>=30)return 2;
+        if(minutes>=15)return 1;
+        return 0;
+    }
+
+    private int pageBg(){return darkMode?Color.rgb(18,20,23):Color.rgb(247,248,250);}
+    private int cardBg(){return darkMode?Color.rgb(31,34,39):Color.WHITE;}
+    private int borderColor(){return darkMode?Color.rgb(61,66,75):Color.rgb(224,227,232);}
+    private int textPrimary(){return darkMode?Color.rgb(235,237,241):Color.rgb(35,38,44);}
+    private int textSecondary(){return darkMode?Color.rgb(166,172,183):Color.rgb(85,90,100);}
+    private int disabledText(){return darkMode?Color.rgb(92,97,106):Color.rgb(145,149,156);}
+    private int warningText(){return darkMode?Color.rgb(244,172,76):Color.rgb(198,104,0);}
+
+    private String axisTime(long ms,boolean weekly){
+        if(ms<=0)return "";
+        ZonedDateTime z=Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault());
+        LocalDate d=z.toLocalDate();
+        if(weekly){
+            return String.format(Locale.TAIWAN,"%d/%d %02d:%02d",
+                    d.getMonthValue(),d.getDayOfMonth(),z.getHour(),z.getMinute());
+        }
+        LocalDate today=LocalDate.now();
+        String time=String.format(Locale.TAIWAN,"%02d:%02d",z.getHour(),z.getMinute());
+        if(d.equals(today))return time;
+        if(d.equals(today.plusDays(1)))return "明 "+time;
+        if(d.equals(today.minusDays(1)))return "昨 "+time;
+        return String.format(Locale.TAIWAN,"%d/%d %s",d.getMonthValue(),d.getDayOfMonth(),time);
     }
 
     private ScrollView scroll(View child){
