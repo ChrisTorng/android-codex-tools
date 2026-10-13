@@ -173,10 +173,8 @@ final class UsageHistory {
                 if(o==null)continue;
                 if(!"reset".equalsIgnoreCase(o.optString("group","")))continue;
 
-                String verification=o.optString("reset_verification_status","");
-                String observation=o.optString("observation_result","");
-                if(!"confirmed".equalsIgnoreCase(verification) &&
-                        !"reset_observed".equalsIgnoreCase(observation))continue;
+                String state=o.optString("announcement_state","");
+                if(!"announced".equalsIgnoreCase(state))continue;
 
                 String ts=o.optString("effective_at","");
                 if(ts.isEmpty())ts=o.optString("announced_at","");
