@@ -34,6 +34,7 @@ final class Scheduler {
     static final String KEY_NEXT="next_alarm_ms";
     static final String KEY_NEXT_REASON="next_alarm_reason";
     static final String KEY_MODE="scheduler_mode";
+    static final String KEY_SAMPLE_MINUTES="sample_interval_minutes";
 
     static final String MODE_OFF="off";
     static final String MODE_AUTO="auto_reset";
@@ -73,6 +74,7 @@ final class Scheduler {
     private static final long RESET_GRACE_MS=15_000L;
     private static final int REQUEST_CODE=1001;
     private static final int BACKUP_JOB_ID=2101;
+    private static final int SAMPLE_JOB_ID=2201;
     private static final long BACKUP_DELAY_MS=90_000L;
     private static final long BACKUP_DEADLINE_EXTRA_MS=8*60_000L;
 
@@ -126,6 +128,13 @@ final class Scheduler {
     }
 
     static boolean enabled(Context c){return !MODE_OFF.equals(mode(c));}
+    static int samplingMinutes(Context c){
+        return Math.max(10,prefs(c).getInt(KEY_SAMPLE_MINUTES,10));
+    }
+    static void setSamplingMinutes(Context c,int minutes){
+        prefs(c).edit().putInt(KEY_SAMPLE_MINUTES,Math.max(10,minutes)).apply();
+        scheduleQuotaSampling(c);
+    }
     static String last(Context c){
         return displayEvent(prefs(c).getString(KEY_LAST,""));
     }
@@ -223,6 +232,7 @@ final class Scheduler {
             storeQuota(c,q,false);
             refreshResetCredits(c,cli,logEvent);
             if(logEvent)record(c,"配額已更新");
+            scheduleQuotaSampling(c);
             if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
             else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
         }catch(Exception e){
@@ -252,6 +262,7 @@ final class Scheduler {
                         .remove(KEY_RESET_DESCRIPTION).remove(KEY_RESET_EXPIRES);
             }
             e.apply();
+            UsageHistory.recordSnapshot(c,snapshot(c));
         }catch(Exception e){
             p.edit()
                     .putInt(KEY_RESET_AVAILABLE,0)
@@ -259,6 +270,7 @@ final class Scheduler {
                     .putLong(KEY_RESET_LAST_CHECK,now)
                     .putString(KEY_RESET_ERROR,safe(e))
                     .apply();
+            UsageHistory.recordSnapshot(c,snapshot(c));
         }
     }
 
@@ -294,6 +306,7 @@ final class Scheduler {
             storeQuota(c,q,false);
             refreshResetCredits(c,cli,true);
             record(c,"Reset 完成 · "+result.windowsReset+" 個視窗");
+            UsageHistory.addEvent(c,"banked_reset","Banked Reset（由 Codex Tools 使用）","Codex Tools");
             notifyNtfy(c,"Codex Reset 完成","已重置 "+result.windowsReset+" 個 usage window");
 
             if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
@@ -732,6 +745,38 @@ final class Scheduler {
                     .putLong(KEY_SECONDARY_RESET,0);
         }
         e.apply();
+        UsageHistory.recordSnapshot(c,snapshot(c));
+    }
+
+    static void scheduleQuotaSampling(Context c){
+        if(!new CodexClient(c).signedIn())return;
+        JobScheduler js=(JobScheduler)c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+        if(js==null)return;
+        long delay=samplingMinutes(c)*60_000L;
+        JobInfo job=new JobInfo.Builder(SAMPLE_JOB_ID,
+                new ComponentName(c,SamplingJobService.class))
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setMinimumLatency(delay)
+                .setOverrideDeadline(delay+5*60_000L)
+                .setPersisted(true)
+                .build();
+        js.schedule(job);
+    }
+
+    static void runQuotaSample(Context c){
+        try{
+            CodexClient cli=new CodexClient(c);
+            if(!cli.signedIn())return;
+            CodexClient.Quota q=cli.getQuota();
+            storeQuota(c,q,false);
+            refreshResetCredits(c,cli,false);
+            if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
+            else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
+        }catch(Exception e){
+            note(c,"配額採樣失敗: "+safe(e));
+        }finally{
+            scheduleQuotaSampling(c);
+        }
     }
 
     private static void record(Context c,String message){
