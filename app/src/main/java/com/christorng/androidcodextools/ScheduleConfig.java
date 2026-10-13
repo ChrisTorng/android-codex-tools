@@ -222,9 +222,26 @@ final class ScheduleConfig {
         candidate.autoCount=0;
         for(int i=0;i<7;i++)candidate.days[i]=true;
 
-        // Search 5-minute slots. A candidate is acceptable only if it stays
-        // at least 5 hours away from every existing anchor/continuation.
-        for(int minute=0;minute<1440;minute+=5){
+        if(rules==null||rules.isEmpty()){
+            candidate.hour=6;
+            candidate.minute=0;
+            return candidate;
+        }
+
+        int latest=-1;
+        for(Rule r:rules){
+            if(!r.enabled)continue;
+            int base=r.hour*60+r.minute;
+            for(int i=0;i<=r.autoCount;i++){
+                int t=(base+i*300)%1440;
+                if(t>latest)latest=t;
+            }
+        }
+        int first=latest<0?360:(latest+300)%1440;
+
+        // Search from the end of the existing sequence, in 5-minute steps.
+        for(int step=0;step<288;step++){
+            int minute=(first+step*5)%1440;
             int h=minute/60, m=minute%60;
             if(isFeasibleStart(h,m,rules,weekly)){
                 candidate.hour=h;
