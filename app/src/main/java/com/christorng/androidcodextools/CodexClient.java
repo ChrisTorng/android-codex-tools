@@ -288,6 +288,16 @@ final class CodexClient {
         return w==null?null:new Window(w.optDouble("used_percent",0),w.optLong("reset_at",0));
     }
 
+    String getPublicJson(String url,String userAgent) throws Exception {
+        Request request=new Request.Builder()
+                .url(url)
+                .header("Accept","application/json")
+                .header("User-Agent",userAgent)
+                .get()
+                .build();
+        return executeText(request);
+    }
+
     private String postForm(String url,FormBody form) throws Exception {
         Request request=new Request.Builder()
                 .url(url)
