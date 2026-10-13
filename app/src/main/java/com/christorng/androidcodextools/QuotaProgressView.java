@@ -17,6 +17,8 @@ final class QuotaProgressView extends View {
     private float pace=-1f;
     private String paceLabel="";
     private float[] tickPositions=new float[0];
+    private String startLabel="",endLabel="";
+    private boolean darkMode=false;
 
     QuotaProgressView(Context c){super(c);}
     QuotaProgressView(Context c, AttributeSet a){super(c,a);}
@@ -27,6 +29,17 @@ final class QuotaProgressView extends View {
 
     void setProgress(double usedPercent,double pacePercent,String label){
         setProgress(usedPercent,pacePercent,label,new float[0]);
+    }
+
+    void setAxisLabels(String start,String end){
+        startLabel=start==null?"":start;
+        endLabel=end==null?"":end;
+        invalidate();
+    }
+
+    void setDarkMode(boolean dark){
+        darkMode=dark;
+        invalidate();
     }
 
     void setProgress(double usedPercent,double pacePercent,String label,float[] ticks){
@@ -41,14 +54,15 @@ final class QuotaProgressView extends View {
         super.onDraw(canvas);
         float density=getResources().getDisplayMetrics().density;
         float labelArea=pace>=0?14f*density:0f;
+        float axisArea=14f*density;
         float barTop=labelArea;
-        float barBottom=getHeight()-1f;
+        float barBottom=getHeight()-axisArea-1f;
         float barHeight=Math.max(6f*density,barBottom-barTop);
         float radius=barHeight/2f;
 
         rect.set(0,barTop,getWidth(),barBottom);
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(Color.rgb(225,229,235));
+        paint.setColor(darkMode?Color.rgb(67,72,82):Color.rgb(225,229,235));
         canvas.drawRoundRect(rect,radius,radius,paint);
 
         if(tickPositions.length>0){
@@ -58,11 +72,11 @@ final class QuotaProgressView extends View {
                 if(p<=0f||p>=100f)continue;
                 float x=getWidth()*p/100f;
                 paint.setStyle(Paint.Style.FILL);
-                paint.setColor(Color.argb(155,255,255,255));
+                paint.setColor(darkMode?Color.argb(175,225,228,235):Color.argb(155,255,255,255));
                 canvas.drawCircle(x,cy,r,paint);
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setStrokeWidth(Math.max(1f,density));
-                paint.setColor(Color.argb(95,30,35,45));
+                paint.setColor(darkMode?Color.argb(110,0,0,0):Color.argb(95,30,35,45));
                 canvas.drawCircle(x,cy,r,paint);
             }
             paint.setStyle(Paint.Style.FILL);
@@ -112,10 +126,23 @@ final class QuotaProgressView extends View {
             if(!paceLabel.isEmpty()){
                 paint.setTextSize(10f*density);
                 paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-                paint.setColor(Color.rgb(82,87,96));
+                paint.setColor(darkMode?Color.rgb(210,214,220):Color.rgb(82,87,96));
                 float width=paint.measureText(paceLabel);
                 float tx=Math.max(0,Math.min(getWidth()-width,x-width/2f));
                 canvas.drawText(paceLabel,tx,10.5f*density,paint);
+            }
+        }
+
+        if(!startLabel.isEmpty()||!endLabel.isEmpty()){
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTypeface(android.graphics.Typeface.DEFAULT);
+            paint.setTextSize(9.5f*density);
+            paint.setColor(darkMode?Color.rgb(170,176,186):Color.rgb(105,111,121));
+            float y=getHeight()-2.5f*density;
+            if(!startLabel.isEmpty())canvas.drawText(startLabel,0,y,paint);
+            if(!endLabel.isEmpty()){
+                float w=paint.measureText(endLabel);
+                canvas.drawText(endLabel,Math.max(0,getWidth()-w),y,paint);
             }
         }
     }
