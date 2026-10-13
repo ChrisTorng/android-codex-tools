@@ -6,11 +6,13 @@ import android.content.Intent;
 
 public class BootReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context c,Intent i){
-        if(!Scheduler.enabled(c))return;
         PendingResult p=goAsync();
         new Thread(()->{
-            try{Scheduler.reschedule(c.getApplicationContext());}
-            finally{p.finish();}
+            try{
+                Context app=c.getApplicationContext();
+                if(new CodexClient(app).signedIn())Scheduler.scheduleQuotaSampling(app);
+                if(Scheduler.enabled(app))Scheduler.reschedule(app);
+            }finally{p.finish();}
         },"codex-reschedule").start();
     }
 }
