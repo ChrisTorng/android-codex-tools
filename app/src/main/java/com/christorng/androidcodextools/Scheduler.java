@@ -422,6 +422,22 @@ final class Scheduler {
         }
     }
 
+    private static boolean chainWouldBlockNextAnchor(Context c,long triggerAt){
+        if(triggerAt<=0)return false;
+        ScheduleConfig.Slot next=ScheduleConfig.nextAnchor(c,triggerAt+1_000L);
+        if(next==null)return false;
+        long predictedReset=triggerAt+5*60*60_000L;
+        return next.whenMs < predictedReset-RESET_TOLERANCE_MS;
+    }
+
+    private static boolean stopChainIfWouldBlockAnchor(Context c,long triggerAt){
+        if(!chainWouldBlockNextAnchor(c,triggerAt))return false;
+        ScheduleConfig.Slot next=ScheduleConfig.nextAnchor(c,triggerAt+1_000L);
+        clearChain(c);
+        record(c,"自動接續停止：避免影響下一錨點 "+(next==null?"":formatTime(next.whenMs)));
+        return true;
+    }
+
     private static void runChain(Context c){
         int remaining=chainRemaining(c);
         if(remaining<=0){
@@ -439,9 +455,14 @@ final class Scheduler {
             Snapshot observed=snapshot(c);
             if(observed.primaryConfirmed && observed.primaryResetMs>now){
                 long reset=observed.primaryResetMs;
+                long triggerAt=Math.max(now+5_000L,reset+RESET_GRACE_MS);
+                if(stopChainIfWouldBlockAnchor(c,triggerAt)){
+                    scheduleNextCustom(c,now+1_000L);
+                    return;
+                }
                 record(c,"自動接續等待實際 5 小時重置");
                 prefs(c).edit().putLong(KEY_CHAIN_RESET,reset).apply();
-                scheduleEvent(c,Math.max(now+5_000L,reset+RESET_GRACE_MS),
+                scheduleEvent(c,triggerAt,
                         "自動接續，尚餘 "+remaining+" 次",EVENT_CHAIN,0);
                 return;
             }
@@ -449,6 +470,11 @@ final class Scheduler {
             if(blocked(q)){
                 record(c,"自動接續因週配額不可用而停止");
                 clearChain(c);
+                scheduleNextCustom(c,now+1_000L);
+                return;
+            }
+
+            if(stopChainIfWouldBlockAnchor(c,now)){
                 scheduleNextCustom(c,now+1_000L);
                 return;
             }
@@ -463,10 +489,17 @@ final class Scheduler {
 
             Snapshot afterObserved=snapshot(c);
             if(remaining>0 && afterObserved.primaryConfirmed && afterObserved.primaryResetMs>System.currentTimeMillis()){
-                prefs(c).edit()
-                        .putInt(KEY_CHAIN_REMAINING,remaining)
-                        .putLong(KEY_CHAIN_RESET,afterObserved.primaryResetMs)
-                        .apply();
+                long nextTrigger=afterObserved.primaryResetMs+RESET_GRACE_MS;
+                if(chainWouldBlockNextAnchor(c,nextTrigger)){
+                    clearChain(c);
+                    ScheduleConfig.Slot next=ScheduleConfig.nextAnchor(c,nextTrigger+1_000L);
+                    record(c,"後續接續停止：保留下個固定錨點 "+(next==null?"":formatTime(next.whenMs)));
+                }else{
+                    prefs(c).edit()
+                            .putInt(KEY_CHAIN_REMAINING,remaining)
+                            .putLong(KEY_CHAIN_RESET,afterObserved.primaryResetMs)
+                            .apply();
+                }
             }else{
                 clearChain(c);
             }
@@ -482,6 +515,13 @@ final class Scheduler {
     private static void startChainFrom(Context c,CodexClient.Quota after,int count){
         Snapshot s=snapshot(c);
         if(count>0 && s.primaryConfirmed && s.primaryResetMs>System.currentTimeMillis()){
+            long firstTrigger=s.primaryResetMs+RESET_GRACE_MS;
+            if(chainWouldBlockNextAnchor(c,firstTrigger)){
+                clearChain(c);
+                ScheduleConfig.Slot next=ScheduleConfig.nextAnchor(c,firstTrigger+1_000L);
+                record(c,"未啟動自動接續：會影響下一錨點 "+(next==null?"":formatTime(next.whenMs)));
+                return;
+            }
             prefs(c).edit()
                     .putInt(KEY_CHAIN_REMAINING,count)
                     .putLong(KEY_CHAIN_RESET,s.primaryResetMs)
@@ -535,6 +575,11 @@ final class Scheduler {
         int remaining=chainRemaining(c);
         long reset=chainResetMs(c);
         long chainMs=(remaining>0&&reset>0)?Math.max(afterMs+1_000L,reset+RESET_GRACE_MS):Long.MAX_VALUE;
+        if(chainMs!=Long.MAX_VALUE && chainWouldBlockNextAnchor(c,chainMs)){
+            clearChain(c);
+            remaining=0;
+            chainMs=Long.MAX_VALUE;
+        }
 
         if(chainMs==Long.MAX_VALUE && anchorMs==Long.MAX_VALUE){
             cancelAlarm(c);
