@@ -53,7 +53,12 @@ final class UsageHistory {
                 s.secondaryResetMs,
                 s.resetAvailableCount);
 
-        samples.add(cur);
+        if(prev!=null && now-prev.at<30_000L){
+            samples.set(samples.size()-1,cur);
+            prev=samples.size()>=2?samples.get(samples.size()-2):null;
+        }else{
+            samples.add(cur);
+        }
         pruneSamples(samples,now);
         saveSamples(c,samples);
 
