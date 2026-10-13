@@ -1,0 +1,22 @@
+name: Keep Android signing cache alive
+
+on:
+  schedule:
+    - cron: '17 4 */3 * *'
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-codex-tools-debug-keystore-v1
+      - name: Verify cached signing key exists
+        run: |
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            echo "Signing cache is missing; a normal APK build will recreate it."
+            exit 0
+          fi
+          keytool -list -v             -keystore "$HOME/.android/debug.keystore"             -storepass android             -alias androiddebugkey | grep -E "SHA256:|SHA-256:" || true
