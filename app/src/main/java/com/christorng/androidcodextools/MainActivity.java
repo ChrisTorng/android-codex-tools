@@ -462,7 +462,7 @@ public class MainActivity extends Activity {
 
         versionText=valueText(13);
         root.addView(compactCard("版本 / 網路",versionText));
-        return root;
+        return scroll(root);
     }
 
     private void refreshAll(){
@@ -583,10 +583,11 @@ public class MainActivity extends Activity {
             if(e.source!=null&&!e.source.isEmpty())list.append(" · ").append(e.source);
         }
         if(list.length()==0){
-            list.append("尚未偵測到 Reset 事件。\n")
-                    .append("配額樣本：").append(samples.size()).append(" 筆 · 每 ")
-                    .append(Scheduler.samplingMinutes(this)).append(" 分鐘目標採樣");
+            list.append("尚未偵測到 Reset 事件。");
         }
+        list.append("\n\n配額樣本：").append(samples.size()).append(" 筆 · 每 ")
+                .append(Scheduler.samplingMinutes(this)).append(" 分鐘目標採樣")
+                .append("\n\n詳細紀錄\n").append(Scheduler.history(this));
         if(historyList!=null)historyList.setText(list.toString());
     }
 
