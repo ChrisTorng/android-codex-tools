@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.pm.PackageInfo;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -58,8 +59,12 @@ import java.util.Set;
 public class MainActivity extends Activity {
     private static final int ACCENT=Color.rgb(47,128,237);
 
-    private View statusPage,schedulePage,settingsPage;
-    private Button tabStatus,tabSchedule,tabSettings;
+    private View statusPage,schedulePage,historyPage,settingsPage;
+    private Button tabStatus,tabSchedule,tabHistory,tabSettings;
+    private UsageHistoryView historyChart;
+    private TextView historyList;
+    private Spinner themeSpinner,sampleSpinner;
+    private boolean darkMode=false;
 
     private TextView accountLine;
     private TextView primaryPercent,primaryMeta;
@@ -82,12 +87,14 @@ public class MainActivity extends Activity {
     private final Runnable periodicQuotaRefresh=new Runnable(){
         @Override public void run(){
             maybeAutoRefresh(false);
-            foregroundHandler.postDelayed(this,10*60_000L);
+            foregroundHandler.postDelayed(this,Scheduler.samplingMinutes(MainActivity.this)*60_000L);
         }
     };
 
     @Override protected void onCreate(Bundle state){
         super.onCreate(state);
+        darkMode=resolveDarkMode();
+        setTheme(darkMode?android.R.style.Theme_Material_NoActionBar:android.R.style.Theme_Material_Light_NoActionBar);
         buildUi();
         refreshAll();
     }
@@ -97,7 +104,7 @@ public class MainActivity extends Activity {
         refreshAll();
         maybeAutoRefresh(true);
         foregroundHandler.removeCallbacks(periodicQuotaRefresh);
-        foregroundHandler.postDelayed(periodicQuotaRefresh,10*60_000L);
+        foregroundHandler.postDelayed(periodicQuotaRefresh,Scheduler.samplingMinutes(this)*60_000L);
     }
 
     @Override protected void onPause(){
@@ -108,7 +115,7 @@ public class MainActivity extends Activity {
     private void buildUi(){
         LinearLayout shell=new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setBackgroundColor(Color.rgb(247,248,250));
+        shell.setBackgroundColor(pageBg());
         shell.setOnApplyWindowInsetsListener((v,insets)->{
             v.setPadding(0,insets.getSystemWindowInsetTop(),0,insets.getSystemWindowInsetBottom());
             return insets;
@@ -121,7 +128,7 @@ public class MainActivity extends Activity {
         title.setText("Codex Tools");
         title.setTextSize(23);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(Color.rgb(30,34,40));
+        title.setTextColor(textPrimary());
         header.addView(title,new LinearLayout.LayoutParams(0,dp(44),1));
         Button refreshSmall=smallButton("↻");
         refreshSmall.setContentDescription("更新配額");
@@ -132,26 +139,31 @@ public class MainActivity extends Activity {
         LinearLayout tabs=new LinearLayout(this);
         tabs.setPadding(dp(14),0,dp(14),dp(8));
         tabs.setGravity(Gravity.CENTER);
-        tabStatus=tabButton("●  狀態");
-        tabSchedule=tabButton("◷  排程");
-        tabSettings=tabButton("⚙  設定");
+        tabStatus=tabButton("● 狀態");
+        tabSchedule=tabButton("◷ 排程");
+        tabHistory=tabButton("▥ 歷程");
+        tabSettings=tabButton("⚙ 設定");
         tabs.addView(tabStatus,weight(dp(42)));
         tabs.addView(tabSchedule,weight(dp(42)));
+        tabs.addView(tabHistory,weight(dp(42)));
         tabs.addView(tabSettings,weight(dp(42)));
         shell.addView(tabs);
 
         FrameLayout host=new FrameLayout(this);
         statusPage=buildStatusPage();
         schedulePage=buildSchedulePage();
+        historyPage=buildHistoryPage();
         settingsPage=buildSettingsPage();
         host.addView(statusPage);
         host.addView(schedulePage);
+        host.addView(historyPage);
         host.addView(settingsPage);
         shell.addView(host,new LinearLayout.LayoutParams(-1,0,1));
 
         tabStatus.setOnClickListener(v->showPage(0));
         tabSchedule.setOnClickListener(v->showPage(1));
-        tabSettings.setOnClickListener(v->showPage(2));
+        tabHistory.setOnClickListener(v->showPage(2));
+        tabSettings.setOnClickListener(v->showPage(3));
         setContentView(shell);
         showPage(0);
     }
@@ -163,7 +175,7 @@ public class MainActivity extends Activity {
 
         accountLine=new TextView(this);
         accountLine.setTextSize(13);
-        accountLine.setTextColor(Color.rgb(95,100,110));
+        accountLine.setTextColor(textSecondary());
         accountLine.setPadding(dp(2),0,0,dp(4));
         root.addView(accountLine);
 
@@ -209,25 +221,6 @@ public class MainActivity extends Activity {
         resetLp.setMargins(0,dp(3),0,dp(3));
         root.addView(resetCreditsRow,resetLp);
 
-        LinearLayout eventsCard=new LinearLayout(this);
-        eventsCard.setOrientation(LinearLayout.VERTICAL);
-        eventsCard.setPadding(dp(11),dp(6),dp(11),dp(6));
-        eventsCard.setBackground(roundRect(Color.WHITE,dp(13),Color.rgb(224,227,232)));
-        eventsCard.addView(sectionLabel("最近事件"));
-
-        ScrollView eventScroll=new ScrollView(this);
-        eventScroll.setFillViewport(false);
-        eventScroll.setVerticalScrollBarEnabled(true);
-        lastEvent=valueText(13);
-        lastEvent.setTextIsSelectable(true);
-        lastEvent.setPadding(0,dp(4),dp(4),dp(4));
-        eventScroll.addView(lastEvent,new ScrollView.LayoutParams(-1,-2));
-        eventsCard.addView(eventScroll,new LinearLayout.LayoutParams(-1,0,1));
-
-        LinearLayout.LayoutParams eventLp=new LinearLayout.LayoutParams(-1,0,1);
-        eventLp.setMargins(0,dp(4),0,0);
-        root.addView(eventsCard,eventLp);
-
         return root;
     }
 
@@ -272,6 +265,36 @@ public class MainActivity extends Activity {
         editTomorrow.setOnClickListener(v->editOverride(LocalDate.now().plusDays(1),"明天"));
 
         return scroll(content);
+    }
+
+    private View buildHistoryPage(){
+        LinearLayout root=new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(12),dp(4),dp(12),dp(8));
+
+        historyChart=new UsageHistoryView(this);
+        root.addView(historyChart,new LinearLayout.LayoutParams(-1,dp(430)));
+
+        TextView source=bodyText("Global Reset 資料：codex-reset.com · 虛線為排程預估，不代表未來實際用量");
+        source.setTextSize(11);
+        source.setSingleLine(true);
+        root.addView(source,new LinearLayout.LayoutParams(-1,dp(28)));
+
+        LinearLayout listCard=new LinearLayout(this);
+        listCard.setOrientation(LinearLayout.VERTICAL);
+        listCard.setPadding(dp(10),dp(6),dp(10),dp(6));
+        listCard.setBackground(roundRect(cardBg(),dp(12),borderColor()));
+        listCard.addView(sectionLabel("事件與採樣"));
+
+        ScrollView scroll=new ScrollView(this);
+        historyList=valueText(12);
+        historyList.setTextIsSelectable(true);
+        historyList.setPadding(0,dp(3),0,dp(6));
+        scroll.addView(historyList,new ScrollView.LayoutParams(-1,-2));
+        listCard.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        root.addView(listCard,new LinearLayout.LayoutParams(-1,0,1));
+
+        return root;
     }
 
     private View buildSettingsPage(){
