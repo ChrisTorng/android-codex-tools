@@ -319,6 +319,56 @@ public class MainActivity extends Activity {
             refreshAll();
         });
 
+        LinearLayout prefRow=new LinearLayout(this);
+        prefRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView themeLabel=sectionLabel("主題");
+        prefRow.addView(themeLabel,new LinearLayout.LayoutParams(dp(56),dp(46)));
+        themeSpinner=new Spinner(this);
+        themeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"跟隨系統","淺色","深色"}));
+        themeSpinner.setSelection(themeSelection());
+        prefRow.addView(themeSpinner,new LinearLayout.LayoutParams(0,dp(46),1));
+
+        TextView sampleLabel=sectionLabel("採樣");
+        prefRow.addView(sampleLabel,new LinearLayout.LayoutParams(dp(56),dp(46)));
+        sampleSpinner=new Spinner(this);
+        sampleSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"10 分","15 分","30 分","60 分"}));
+        sampleSpinner.setSelection(sampleSelection(Scheduler.samplingMinutes(this)));
+        prefRow.addView(sampleSpinner,new LinearLayout.LayoutParams(0,dp(46),1));
+        root.addView(prefRow,new LinearLayout.LayoutParams(-1,dp(48)));
+
+        themeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+            boolean ready=false;
+            @Override public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){
+                if(!ready){ready=true;return;}
+                String mode=pos==1?"light":pos==2?"dark":"system";
+                String old=Scheduler.prefs(MainActivity.this).getString("theme_mode","system");
+                if(!mode.equals(old)){
+                    Scheduler.prefs(MainActivity.this).edit().putString("theme_mode",mode).apply();
+                    recreate();
+                }
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> p){}
+        });
+        sampleSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+            boolean ready=false;
+            @Override public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){
+                if(!ready){ready=true;return;}
+                int[] values={10,15,30,60};
+                int selected=values[Math.max(0,Math.min(values.length-1,pos))];
+                if(selected!=Scheduler.samplingMinutes(MainActivity.this)){
+                    Scheduler.setSamplingMinutes(MainActivity.this,selected);
+                    foregroundHandler.removeCallbacks(periodicQuotaRefresh);
+                    foregroundHandler.postDelayed(periodicQuotaRefresh,selected*60_000L);
+                    Scheduler.note(MainActivity.this,"歷程採樣改為每 "+selected+" 分鐘");
+                    refreshAll();
+                }
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> p){}
+        });
+
         TextView ntfyLabel=sectionTitle("ntfy");
         ntfyLabel.setPadding(0,dp(8),0,0);
         root.addView(ntfyLabel);
@@ -411,6 +461,7 @@ public class MainActivity extends Activity {
     private void refreshAll(){
         refreshStatus();
         refreshSchedule();
+        refreshHistory();
         refreshSettings();
     }
 
@@ -425,31 +476,40 @@ public class MainActivity extends Activity {
         if(q.primaryActive && q.primaryConfirmed){
             primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
             double pace=pace(now,q.primaryResetMs,5*60*60_000L);
+            primaryBar.setDarkMode(darkMode);
+            primaryBar.setAxisLabels(
+                    axisTime(q.primaryResetMs-5*60*60_000L,false),
+                    axisTime(q.primaryResetMs,false));
             primaryBar.setProgress(q.primaryUsed,pace,
                     String.format(Locale.TAIWAN,"%.0f%%",pace),
                     hourTicks(q.primaryResetMs,5*60*60_000L));
-            primaryMeta.setText("重置 "+Scheduler.formatTime(q.primaryResetMs));
         }else if(q.primaryActive){
             primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
+            primaryBar.setDarkMode(darkMode);
+            primaryBar.setAxisLabels("尚未啟動",axisTime(q.primaryResetMs,false));
             primaryBar.setProgress(q.primaryUsed,-1);
-            primaryMeta.setText("尚未啟動 · 查詢約 "+Scheduler.formatTime(q.primaryResetMs));
         }else{
             primaryPercent.setText("—");
+            primaryBar.setDarkMode(darkMode);
+            primaryBar.setAxisLabels("未啟動","");
             primaryBar.setProgress(0,-1);
-            primaryMeta.setText("目前沒有 5 小時視窗");
         }
 
         if(q.secondaryActive){
             weeklyPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.secondaryUsed));
             double pace=pace(now,q.secondaryResetMs,7*24*60*60_000L);
+            weeklyBar.setDarkMode(darkMode);
+            weeklyBar.setAxisLabels(
+                    axisTime(q.secondaryResetMs-7*24*60*60_000L,true),
+                    axisTime(q.secondaryResetMs,true));
             weeklyBar.setProgress(q.secondaryUsed,pace,
                     String.format(Locale.TAIWAN,"%.0f%%",pace),
                     midnightTicks(q.secondaryResetMs,7*24*60*60_000L));
-            weeklyMeta.setText("重置 "+Scheduler.formatTime(q.secondaryResetMs));
         }else{
             weeklyPercent.setText("—");
+            weeklyBar.setDarkMode(darkMode);
+            weeklyBar.setAxisLabels("無資料","");
             weeklyBar.setProgress(0,-1);
-            weeklyMeta.setText("目前沒有週配額資料");
         }
 
         String mode=Scheduler.mode(this);
@@ -460,7 +520,7 @@ public class MainActivity extends Activity {
         boolean activeConfirmed=q.primaryConfirmed && q.primaryResetMs>now;
         triggerButton.setEnabled(!activeConfirmed);
         triggerButton.setAlpha(activeConfirmed?0.38f:1f);
-        triggerButton.setTextColor(activeConfirmed?Color.rgb(145,149,156):Color.rgb(35,38,44));
+        triggerButton.setTextColor(activeConfirmed?disabledText():textPrimary());
         if(activeConfirmed){
             manualTriggerPreview.setText("5h 視窗進行中 · 下一次可重新開始：約 "+
                     Scheduler.formatTime(q.primaryResetMs));
@@ -479,7 +539,7 @@ public class MainActivity extends Activity {
             resetCreditsRow.setVisibility(View.GONE);
         }
 
-        lastEvent.setText(Scheduler.history(this));
+        if(lastEvent!=null)lastEvent.setText(Scheduler.history(this));
     }
 
     private void refreshSchedule(){
@@ -494,12 +554,59 @@ public class MainActivity extends Activity {
         List<ScheduleConfig.Rule> weeklyRules=ScheduleConfig.loadWeekly(this);
         weeklySummary.setText(rulesSummary(weeklyRules,true));
         weeklySummary.setTextColor(ScheduleConfig.conflictingRuleIds(weeklyRules,true).isEmpty()
-                ?Color.rgb(35,38,44):Color.rgb(198,104,0));
+                ?textPrimary():warningText());
 
         ScheduleConfig.DayOverride today=ScheduleConfig.loadOverride(this,LocalDate.now());
         todaySummary.setText(overrideSummary(today,"使用每週預設"));
         ScheduleConfig.DayOverride tomorrow=ScheduleConfig.loadOverride(this,LocalDate.now().plusDays(1));
         tomorrowSummary.setText(overrideSummary(tomorrow,"使用每週預設"));
+    }
+
+    private void refreshHistory(){
+        if(historyChart==null)return;
+        List<UsageHistory.Sample> samples=UsageHistory.loadSamples(this);
+        List<UsageHistory.Event> events=UsageHistory.loadEvents(this);
+        historyChart.setData(samples,events,forecastMarkers(),darkMode);
+
+        StringBuilder list=new StringBuilder();
+        for(int i=events.size()-1;i>=0;i--){
+            UsageHistory.Event e=events.get(i);
+            if(list.length()>0)list.append("\n");
+            list.append(Scheduler.formatTime(e.at)).append(" · ").append(e.label);
+            if(e.source!=null&&!e.source.isEmpty())list.append(" · ").append(e.source);
+        }
+        if(list.length()==0){
+            list.append("尚未偵測到 Reset 事件。\n")
+                    .append("配額樣本：").append(samples.size()).append(" 筆 · 每 ")
+                    .append(Scheduler.samplingMinutes(this)).append(" 分鐘目標採樣");
+        }
+        if(historyList!=null)historyList.setText(list.toString());
+    }
+
+    private List<UsageHistoryView.Marker> forecastMarkers(){
+        List<UsageHistoryView.Marker> out=new ArrayList<>();
+        ZoneId zone=ZoneId.systemDefault();
+        LocalDate today=LocalDate.now(zone);
+        for(int day=0;day<=1;day++){
+            LocalDate date=today.plusDays(day);
+            for(ScheduleConfig.Rule r:ScheduleConfig.rulesForDate(this,date)){
+                if(!r.enabled)continue;
+                long at=date.atTime(r.hour,r.minute).atZone(zone).toInstant().toEpochMilli();
+                if(at>=System.currentTimeMillis()-60_000L)
+                    out.add(new UsageHistoryView.Marker(at,"anchor"));
+                long autoAt=at;
+                for(int i=0;i<r.autoCount;i++){
+                    autoAt+=5*60*60_000L;
+                    out.add(new UsageHistoryView.Marker(autoAt,"auto"));
+                }
+            }
+        }
+        int remaining=Scheduler.chainRemaining(this);
+        long chain=Scheduler.chainResetMs(this);
+        for(int i=0;i<remaining&&chain>0;i++){
+            out.add(new UsageHistoryView.Marker(chain+15_000L+i*5*60*60_000L,"auto"));
+        }
+        return out;
     }
 
     private void refreshSettings(){
@@ -517,7 +624,7 @@ public class MainActivity extends Activity {
         try{
             PackageInfo p=getPackageManager().getPackageInfo(getPackageName(),0);
             versionText.setText(p.versionName+"  ·  build "+p.getLongVersionCode()+
-                    "\nAndroid DNS 失敗時自動使用 DoH fallback；Tailscale 開／關皆可。");
+                    "\n系統 DNS 失敗時自動使用 DoH fallback；Tailscale 開／關皆可。");
         }catch(Exception e){versionText.setText("—");}
     }
 
