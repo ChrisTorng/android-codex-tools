@@ -66,6 +66,7 @@ public class MainActivity extends Activity {
     private TextView historyList;
     private Spinner themeSpinner,sampleSpinner;
     private boolean darkMode=false;
+    private int currentPage=0;
 
     private TextView accountLine;
     private TextView primaryPercent,primaryMeta;
@@ -170,7 +171,8 @@ public class MainActivity extends Activity {
         tabHistory.setOnClickListener(v->showPage(2));
         tabSettings.setOnClickListener(v->showPage(3));
         setContentView(shell);
-        showPage(0);
+        currentPage=Math.max(0,Math.min(3,Scheduler.prefs(this).getInt("ui_page",0)));
+        showPage(currentPage);
     }
 
     private View buildStatusPage(){
@@ -211,21 +213,31 @@ public class MainActivity extends Activity {
         check.setOnClickListener(v->runCheck());
         triggerButton.setOnClickListener(v->confirmTrigger());
 
-        resetCreditsRow=new LinearLayout(this);
-        ((LinearLayout)resetCreditsRow).setOrientation(LinearLayout.HORIZONTAL);
-        ((LinearLayout)resetCreditsRow).setGravity(Gravity.CENTER_VERTICAL);
-        ((LinearLayout)resetCreditsRow).setPadding(dp(10),dp(4),dp(6),dp(4));
-        resetCreditsRow.setBackground(roundRect(
+        LinearLayout resetCard=new LinearLayout(this);
+        resetCard.setOrientation(LinearLayout.VERTICAL);
+        resetCard.setPadding(dp(10),dp(6),dp(8),dp(6));
+        resetCard.setBackground(roundRect(
                 darkMode?Color.rgb(68,58,34):Color.rgb(255,248,232),
                 dp(12),
                 darkMode?Color.rgb(174,133,54):Color.rgb(231,183,82)));
-        resetCreditsText=valueText(12);
-        ((LinearLayout)resetCreditsRow).addView(resetCreditsText,new LinearLayout.LayoutParams(0,dp(40),1));
-        resetCreditsButton=smallButton("使用 Reset");
-        ((LinearLayout)resetCreditsRow).addView(resetCreditsButton,new LinearLayout.LayoutParams(dp(104),dp(40)));
+        resetCreditsRow=resetCard;
+
+        LinearLayout resetTop=new LinearLayout(this);
+        resetTop.setGravity(Gravity.CENTER_VERTICAL);
+        TextView resetTitle=sectionLabel("Banked Reset");
+        resetTitle.setTextColor(textPrimary());
+        resetTop.addView(resetTitle,new LinearLayout.LayoutParams(0,dp(34),1));
+        resetCreditsButton=smallButton("Reset");
+        resetCreditsButton.setTypeface(Typeface.DEFAULT_BOLD);
         resetCreditsButton.setOnClickListener(v->confirmReset());
+        resetTop.addView(resetCreditsButton,new LinearLayout.LayoutParams(dp(84),dp(34)));
+        resetCard.addView(resetTop);
+
+        resetCreditsText=valueText(12);
+        resetCreditsText.setLineSpacing(0,1.0f);
+        resetCard.addView(resetCreditsText,new LinearLayout.LayoutParams(-1,-2));
         resetCreditsRow.setVisibility(View.VISIBLE);
-        LinearLayout.LayoutParams resetLp=new LinearLayout.LayoutParams(-1,dp(48));
+        LinearLayout.LayoutParams resetLp=new LinearLayout.LayoutParams(-1,-2);
         resetLp.setMargins(0,dp(3),0,dp(3));
         root.addView(resetCreditsRow,resetLp);
 
@@ -361,7 +373,10 @@ public class MainActivity extends Activity {
                 String mode=pos==1?"light":pos==2?"dark":"system";
                 String old=Scheduler.prefs(MainActivity.this).getString("theme_mode","system");
                 if(!mode.equals(old)){
-                    Scheduler.prefs(MainActivity.this).edit().putString("theme_mode",mode).apply();
+                    Scheduler.prefs(MainActivity.this).edit()
+                            .putString("theme_mode",mode)
+                            .putInt("ui_page",currentPage)
+                            .apply();
                     recreate();
                 }
             }
@@ -526,7 +541,7 @@ public class MainActivity extends Activity {
 
         boolean activeConfirmed=q.primaryConfirmed && q.primaryResetMs>now;
         triggerButton.setEnabled(!activeConfirmed);
-        triggerButton.setAlpha(activeConfirmed?0.38f:1f);
+        triggerButton.setAlpha(activeConfirmed?0.62f:1f);
         triggerButton.setTextColor(activeConfirmed?disabledText():textPrimary());
         if(activeConfirmed){
             manualTriggerPreview.setText("5h 進行中 · 可再開始：約 "+
@@ -539,12 +554,25 @@ public class MainActivity extends Activity {
         boolean resetEligible=Scheduler.resetEligibleNow(this);
         boolean hasReset=q.resetAvailableCount>0 && q.resetCreditId!=null && !q.resetCreditId.isEmpty();
         resetCreditsRow.setVisibility(View.VISIBLE);
-        String expiry=q.resetExpires==null||q.resetExpires.isEmpty()?"":(" · 到期 "+formatIsoTime(q.resetExpires));
-        resetCreditsText.setText("Banked Reset "+q.resetAvailableCount+" 次"+expiry);
+        StringBuilder resetInfo=new StringBuilder();
+        resetInfo.append(q.resetAvailableCount).append(" 次可用");
+        if(q.resetExpiries!=null&&!q.resetExpiries.isEmpty()){
+            String[] entries=q.resetExpiries.split("\n");
+            for(String entry:entries){
+                String[] parts=entry.split("\\|",2);
+                String n=parts.length>0?parts[0]:"";
+                String iso=parts.length>1?parts[1]:"";
+                if(iso.isEmpty())continue;
+                resetInfo.append("\n#").append(n).append(" 到期 ").append(formatIsoMinute(iso));
+            }
+        }else if(q.resetExpires!=null&&!q.resetExpires.isEmpty()){
+            resetInfo.append("\n#1 到期 ").append(formatIsoMinute(q.resetExpires));
+        }
+        resetCreditsText.setText(resetInfo.toString());
         resetCreditsButton.setText("Reset");
         resetCreditsButton.setEnabled(resetEligible&&hasReset);
-        resetCreditsButton.setAlpha(resetEligible&&hasReset?1f:0.38f);
-        resetCreditsButton.setTextColor(resetEligible&&hasReset?textPrimary():disabledText());
+        resetCreditsButton.setAlpha(resetEligible&&hasReset?1f:0.72f);
+        resetCreditsButton.setTextColor(resetEligible&&hasReset?textPrimary():textSecondary());
 
         UsageHistory.GlobalResetStats gs=UsageHistory.loadGlobalResetStats(this);
         if(globalResetText!=null){
@@ -1165,6 +1193,21 @@ public class MainActivity extends Activity {
         return String.format(Locale.TAIWAN,"%d/%d",z.getMonthValue(),z.getDayOfMonth());
     }
 
+    private String formatIsoMinute(String iso){
+        try{
+            ZonedDateTime z=Instant.parse(iso).atZone(ZoneId.systemDefault());
+            LocalDate d=z.toLocalDate();
+            String prefix;
+            LocalDate today=LocalDate.now();
+            if(d.equals(today))prefix="今天";
+            else if(d.equals(today.plusDays(1)))prefix="明天";
+            else prefix=String.format(Locale.TAIWAN,"%d/%d",d.getMonthValue(),d.getDayOfMonth());
+            return String.format(Locale.TAIWAN,"%s %02d:%02d",prefix,z.getHour(),z.getMinute());
+        }catch(Exception e){
+            return iso;
+        }
+    }
+
     private String formatIsoTime(String iso){
         try{
             return Scheduler.formatTime(java.time.Instant.parse(iso).toEpochMilli());
@@ -1195,9 +1238,9 @@ public class MainActivity extends Activity {
         top.addView(percent,new LinearLayout.LayoutParams(-2,dp(27)));
         box.addView(top);
 
-        box.addView(chart,new LinearLayout.LayoutParams(-1,dp(96)));
+        box.addView(chart,new LinearLayout.LayoutParams(-1,dp(84)));
 
-        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(132));
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(120));
         lp.setMargins(0,dp(3),0,dp(3));
         box.setLayoutParams(lp);
         return box;
@@ -1321,6 +1364,8 @@ public class MainActivity extends Activity {
     }
 
     private void showPage(int i){
+        currentPage=i;
+        Scheduler.prefs(this).edit().putInt("ui_page",i).apply();
         statusPage.setVisibility(i==0?View.VISIBLE:View.GONE);
         schedulePage.setVisibility(i==1?View.VISIBLE:View.GONE);
         historyPage.setVisibility(i==2?View.VISIBLE:View.GONE);
