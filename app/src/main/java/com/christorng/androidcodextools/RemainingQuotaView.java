@@ -30,6 +30,7 @@ final class RemainingQuotaView extends View {
 
     private float chartLeft,chartRight,chartTop,chartBottom;
     private UsageHistory.Sample selected=null;
+    private float selectedX=0;
 
     RemainingQuotaView(Context c){super(c);setClickable(true);}
 
@@ -61,19 +62,35 @@ final class RemainingQuotaView extends View {
 
     @Override public boolean performClick(){super.performClick();return true;}
 
-    private UsageHistory.Sample findNearestSample(float x){
-        if(resetMs<=0||samples.isEmpty()||chartRight<=chartLeft)return null;
+    private List<UsageHistory.Sample> visibleSamples(){
+        List<UsageHistory.Sample> out=new ArrayList<>();
+        if(resetMs<=0)return out;
         long start=resetMs-durationMs;
-        UsageHistory.Sample best=null;
-        float bestDx=Float.MAX_VALUE;
         for(UsageHistory.Sample s:samples){
             if(s.at<start-60_000L||s.at>resetMs+60_000L)continue;
-            if(primary&&!s.primaryConfirmed)continue;
             long sr=primary?s.primaryReset:s.weeklyReset;
             if(sr>0&&Math.abs(sr-resetMs)>5*60_000L)continue;
+            out.add(s);
+        }
+        return out;
+    }
+
+    private UsageHistory.Sample findNearestSample(float x){
+        if(resetMs<=0||chartRight<=chartLeft)return null;
+        List<UsageHistory.Sample> visible=visibleSamples();
+        if(visible.isEmpty())return null;
+        long start=resetMs-durationMs;
+
+        float first=xFor(visible.get(0).at,start,resetMs,chartLeft,chartRight);
+        float last=xFor(visible.get(visible.size()-1).at,start,resetMs,chartLeft,chartRight);
+        if(x<first||x>last)return null;
+
+        UsageHistory.Sample best=null;
+        float bestDx=Float.MAX_VALUE;
+        for(UsageHistory.Sample s:visible){
             float sx=xFor(s.at,start,resetMs,chartLeft,chartRight);
             float dx=Math.abs(sx-x);
-            if(dx<bestDx){bestDx=dx;best=s;}
+            if(dx<bestDx){bestDx=dx;best=s;selectedX=sx;}
         }
         return best;
     }
@@ -85,7 +102,6 @@ final class RemainingQuotaView extends View {
         int muted=dark?Color.rgb(145,151,161):Color.rgb(115,121,131);
         int grid=dark?Color.rgb(59,64,73):Color.rgb(226,229,234);
         int actual=primary?Color.rgb(47,128,237):Color.rgb(232,145,52);
-        int ideal=actual;
 
         chartLeft=5*d;
         chartRight=getWidth()-5*d;
@@ -93,11 +109,10 @@ final class RemainingQuotaView extends View {
         chartBottom=getHeight()-22*d;
         if(chartRight<=chartLeft||chartBottom<=chartTop)return;
 
-        // Horizontal guides only; no left-side 0/50/100 labels.
-        paint.setStrokeWidth(1f);
         for(int v:new int[]{100,50,0}){
             float y=yFor(v,chartTop,chartBottom);
             paint.setColor(grid);
+            paint.setStrokeWidth(1f);
             canvas.drawLine(chartLeft,y,chartRight,y,paint);
         }
 
@@ -113,72 +128,68 @@ final class RemainingQuotaView extends View {
 
         drawClockTicks(canvas,start,resetMs,d,grid,muted);
 
-        // Ideal remaining: 100 -> 0 over the current window.
-        float x0=xFor(start,start,resetMs,chartLeft,chartRight);
-        float x1=xFor(resetMs,start,resetMs,chartLeft,chartRight);
+        // 理想剩餘：目前這一個 window 由 100% 線性降到 0%。
         Path idealFill=new Path();
-        idealFill.moveTo(x0,yFor(100,chartTop,chartBottom));
-        idealFill.lineTo(x1,yFor(0,chartTop,chartBottom));
-        idealFill.lineTo(x1,chartBottom);
-        idealFill.lineTo(x0,chartBottom);
+        idealFill.moveTo(chartLeft,yFor(100,chartTop,chartBottom));
+        idealFill.lineTo(chartRight,yFor(0,chartTop,chartBottom));
+        idealFill.lineTo(chartRight,chartBottom);
+        idealFill.lineTo(chartLeft,chartBottom);
         idealFill.close();
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(Color.argb(dark?28:20,Color.red(ideal),Color.green(ideal),Color.blue(ideal)));
+        paint.setColor(Color.argb(dark?28:20,Color.red(actual),Color.green(actual),Color.blue(actual)));
         canvas.drawPath(idealFill,paint);
 
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(1.5f*d);
+        paint.setStrokeWidth(1.4f*d);
         paint.setPathEffect(new DashPathEffect(new float[]{5*d,4*d},0));
-        paint.setColor(ideal);
-        canvas.drawLine(x0,yFor(100,chartTop,chartBottom),x1,yFor(0,chartTop,chartBottom),paint);
+        paint.setColor(Color.argb(180,Color.red(actual),Color.green(actual),Color.blue(actual)));
+        canvas.drawLine(chartLeft,yFor(100,chartTop,chartBottom),
+                chartRight,yFor(0,chartTop,chartBottom),paint);
         paint.setPathEffect(null);
 
-        List<float[]> pts=new ArrayList<>();
-        for(UsageHistory.Sample s:samples){
-            if(s.at<start-60_000L||s.at>Math.min(now,resetMs)+60_000L)continue;
-            if(primary&&!s.primaryConfirmed)continue;
-            long sr=primary?s.primaryReset:s.weeklyReset;
-            if(sr>0&&Math.abs(sr-resetMs)>5*60_000L)continue;
-            double used=primary?s.primaryUsed:s.weeklyUsed;
-            double remaining=100.0-Math.max(0,Math.min(100,used));
-            pts.add(new float[]{xFor(s.at,start,resetMs,chartLeft,chartRight),
-                    yFor(remaining,chartTop,chartBottom),(float)remaining});
-        }
-        if(pts.isEmpty()&&active){
-            pts.add(new float[]{xFor(now,start,resetMs,chartLeft,chartRight),
-                    yFor(currentRemaining,chartTop,chartBottom),(float)currentRemaining});
-        }
-
-        if(!pts.isEmpty()){
+        List<UsageHistory.Sample> visible=visibleSamples();
+        if(!visible.isEmpty()){
             Path area=new Path();
-            area.moveTo(pts.get(0)[0],chartBottom);
-            for(float[] p:pts)area.lineTo(p[0],p[1]);
-            area.lineTo(pts.get(pts.size()-1)[0],chartBottom);
+            Path line=new Path();
+            boolean first=true;
+            float lastX=chartLeft;
+            for(UsageHistory.Sample s:visible){
+                double used=primary?s.primaryUsed:s.weeklyUsed;
+                double remaining=100.0-Math.max(0,Math.min(100,used));
+                float x=xFor(s.at,start,resetMs,chartLeft,chartRight);
+                float y=yFor(remaining,chartTop,chartBottom);
+                if(first){
+                    area.moveTo(x,chartBottom);
+                    area.lineTo(x,y);
+                    line.moveTo(x,y);
+                    first=false;
+                }else{
+                    area.lineTo(x,y);
+                    line.lineTo(x,y);
+                }
+                lastX=x;
+            }
+            area.lineTo(lastX,chartBottom);
             area.close();
+
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(Color.argb(dark?60:46,Color.red(actual),Color.green(actual),Color.blue(actual)));
             canvas.drawPath(area,paint);
 
-            path.reset();
-            for(int i=0;i<pts.size();i++){
-                float[] p=pts.get(i);
-                if(i==0)path.moveTo(p[0],p[1]);else path.lineTo(p[0],p[1]);
-            }
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(2.2f*d);
             paint.setColor(actual);
-            canvas.drawPath(path,paint);
+            canvas.drawPath(line,paint);
         }
 
-        // Current-time marker.
+        // 現在時間只是一條游標，不代表此刻已有新採樣。
         if(now>=start&&now<=resetMs){
             float x=xFor(now,start,resetMs,chartLeft,chartRight);
-            paint.setColor(dark?Color.rgb(220,223,228):Color.rgb(83,88,98));
+            paint.setColor(dark?Color.rgb(215,218,224):Color.rgb(83,88,98));
             paint.setStrokeWidth(1f*d);
             canvas.drawLine(x,chartTop,x,chartBottom,paint);
         }
 
-        // Start/end labels.
         paint.setStyle(Paint.Style.FILL);
         paint.setTextSize(9*d);
         paint.setColor(fg);
@@ -188,7 +199,7 @@ final class RemainingQuotaView extends View {
         float ew=paint.measureText(en);
         canvas.drawText(en,Math.max(chartLeft,chartRight-ew),getHeight()-3*d,paint);
 
-        if(selected!=null)drawTooltip(canvas,selected,d,actual,fg);
+        if(selected!=null)drawSelection(canvas,selected,d,actual,fg);
     }
 
     private void drawClockTicks(Canvas canvas,long start,long end,float d,int grid,int muted){
@@ -226,24 +237,26 @@ final class RemainingQuotaView extends View {
         }
     }
 
-    private void drawTooltip(Canvas canvas,UsageHistory.Sample s,float d,int color,int fg){
+    private void drawSelection(Canvas canvas,UsageHistory.Sample s,float d,int color,int fg){
         double used=primary?s.primaryUsed:s.weeklyUsed;
         double remain=100-Math.max(0,Math.min(100,used));
-        String text=String.format(Locale.TAIWAN,"%s  %.0f%%",clock(s.at),remain);
+        String text=String.format(Locale.TAIWAN,"%s · %.0f%% 剩餘",clock(s.at),remain);
+
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(1.3f*d);
+        paint.setColor(color);
+        canvas.drawLine(selectedX,chartTop,selectedX,chartBottom,paint);
+
         paint.setTextSize(10*d);
         paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        float pad=6*d,w=paint.measureText(text)+pad*2,h=24*d;
-        long start=resetMs-durationMs;
-        float sx=xFor(s.at,start,resetMs,chartLeft,chartRight);
-        float x=Math.max(chartLeft,Math.min(chartRight-w,sx-w/2f));
-        float y=chartTop+4*d;
+        float pad=6*d,w=paint.measureText(text)+pad*2,h=23*d;
+        float x=Math.max(chartLeft,Math.min(chartRight-w,selectedX-w/2f));
+        float y=chartTop+2*d;
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(dark?Color.rgb(48,52,60):Color.WHITE);
         canvas.drawRoundRect(x,y,x+w,y+h,6*d,6*d,paint);
-        paint.setColor(color);
-        canvas.drawCircle(sx,y+h+4*d,3*d,paint);
         paint.setColor(fg);
-        canvas.drawText(text,x+pad,y+16*d,paint);
+        canvas.drawText(text,x+pad,y+15.5f*d,paint);
     }
 
     private float xFor(long t,long start,long end,float left,float right){
@@ -266,11 +279,5 @@ final class RemainingQuotaView extends View {
     private String shortDate(long ms){
         ZonedDateTime z=Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault());
         return String.format(Locale.TAIWAN,"%d/%d",z.getMonthValue(),z.getDayOfMonth());
-    }
-
-    private String shortDateTime(long ms){
-        ZonedDateTime z=Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault());
-        return String.format(Locale.TAIWAN,"%d/%d %02d:%02d",
-                z.getMonthValue(),z.getDayOfMonth(),z.getHour(),z.getMinute());
     }
 }
