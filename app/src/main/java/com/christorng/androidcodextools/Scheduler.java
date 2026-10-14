@@ -830,11 +830,11 @@ final class Scheduler {
 
     private static String quotaNotification(CodexClient.Quota q){
         String p=q.primary==null?"5 小時：未啟動":
-                String.format(Locale.TAIWAN,"5 小時已使用 %.0f%%，重置 %s",
-                        q.primary.usedPercent,formatTime(q.primary.resetAt*1000L));
+                String.format(Locale.TAIWAN,"5 小時剩餘 %.0f%%，重置 %s",
+                        Math.max(0,100-q.primary.usedPercent),formatTime(q.primary.resetAt*1000L));
         String w=q.secondary==null?"週配額：無資料":
-                String.format(Locale.TAIWAN,"週配額已使用 %.0f%%，重置 %s",
-                        q.secondary.usedPercent,formatTime(q.secondary.resetAt*1000L));
+                String.format(Locale.TAIWAN,"週配額剩餘 %.0f%%，重置 %s",
+                        Math.max(0,100-q.secondary.usedPercent),formatTime(q.secondary.resetAt*1000L));
         return p+"\n"+w;
     }
 
