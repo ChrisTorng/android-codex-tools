@@ -71,7 +71,7 @@ public class MainActivity extends Activity {
     private TextView primaryPercent,primaryMeta;
     private TextView weeklyPercent,weeklyMeta;
     private RemainingQuotaView primaryBar,weeklyBar;
-    private TextView scheduleSummary,lastEvent,manualTriggerPreview,resetCreditsText;
+    private TextView scheduleSummary,lastEvent,manualTriggerPreview,resetCreditsText,globalResetText;
     private View resetCreditsRow;
     private Button triggerButton,resetCreditsButton;
 
@@ -229,6 +229,9 @@ public class MainActivity extends Activity {
         resetLp.setMargins(0,dp(3),0,dp(3));
         root.addView(resetCreditsRow,resetLp);
 
+        globalResetText=valueText(12);
+        root.addView(compactCard("Global Reset",globalResetText));
+
         return root;
     }
 
@@ -286,7 +289,7 @@ public class MainActivity extends Activity {
         TextView source=bodyText("Global Reset：codex-reset.com · 實線＝實際剩餘 · 虛線＝理想/排程");
         source.setTextSize(10);
         source.setSingleLine(true);
-        root.addView(source,new LinearLayout.LayoutParams(-1,dp(22)));
+        root.addView(source,new LinearLayout.LayoutParams(-1,dp(28)));
 
         LinearLayout listCard=new LinearLayout(this);
         listCard.setOrientation(LinearLayout.VERTICAL);
@@ -300,7 +303,7 @@ public class MainActivity extends Activity {
         historyList.setPadding(0,dp(3),0,dp(6));
         scroll.addView(historyList,new ScrollView.LayoutParams(-1,-2));
         listCard.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-        root.addView(listCard,new LinearLayout.LayoutParams(-1,dp(150)));
+        root.addView(listCard,new LinearLayout.LayoutParams(-1,dp(190)));
 
         return root;
     }
@@ -540,6 +543,27 @@ public class MainActivity extends Activity {
         resetCreditsButton.setEnabled(resetEligible&&hasReset);
         resetCreditsButton.setAlpha(resetEligible&&hasReset?1f:0.38f);
         resetCreditsButton.setTextColor(resetEligible&&hasReset?textPrimary():disabledText());
+
+        UsageHistory.GlobalResetStats gs=UsageHistory.loadGlobalResetStats(this);
+        if(globalResetText!=null){
+            if(gs==null||gs.lastResetAt<=0){
+                globalResetText.setText("尚無資料 · codex-reset.com");
+            }else{
+                StringBuilder g=new StringBuilder();
+                g.append("上次 ").append(shortDay(gs.lastResetAt))
+                        .append(" · 已 ").append(String.format(Locale.TAIWAN,"%.1f 天",gs.ageDays));
+                if(gs.medianDays>0){
+                    g.append("\n中位 ").append(String.format(Locale.TAIWAN,"%.1f 天",gs.medianDays))
+                            .append(" · 推估 ").append(shortDay(gs.medianEstimateAt));
+                }
+                if(gs.p24>=0||gs.p48>=0){
+                    g.append(" · ");
+                    if(gs.p24>=0)g.append("24h ").append(gs.p24).append("%");
+                    if(gs.p48>=0)g.append(" / 48h ").append(gs.p48).append("%");
+                }
+                globalResetText.setText(g.toString());
+            }
+        }
 
         if(lastEvent!=null)lastEvent.setText(Scheduler.history(this));
     }
@@ -1123,6 +1147,17 @@ public class MainActivity extends Activity {
         long hours=elapsed/(60*60_000L);
         long mins=(elapsed%(60*60_000L))/60_000L;
         return hours+"h "+mins+"m";
+    }
+
+    private String shortDay(long ms){
+        if(ms<=0)return "—";
+        ZonedDateTime z=Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault());
+        LocalDate d=z.toLocalDate();
+        LocalDate today=LocalDate.now();
+        if(d.equals(today))return "今天 "+String.format(Locale.TAIWAN,"%02d:%02d",z.getHour(),z.getMinute());
+        if(d.equals(today.minusDays(1)))return "昨天 "+String.format(Locale.TAIWAN,"%02d:%02d",z.getHour(),z.getMinute());
+        if(d.equals(today.plusDays(1)))return "明天 "+String.format(Locale.TAIWAN,"%02d:%02d",z.getHour(),z.getMinute());
+        return String.format(Locale.TAIWAN,"%d/%d",z.getMonthValue(),z.getDayOfMonth());
     }
 
     private String formatIsoTime(String iso){
