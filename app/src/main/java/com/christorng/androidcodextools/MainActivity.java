@@ -1028,7 +1028,8 @@ public class MainActivity extends Activity {
     private void maybeAutoRefresh(boolean enteringScreen){
         if(!new CodexClient(this).signedIn()||quotaRefreshRunning)return;
         long now=System.currentTimeMillis();
-        long minGap=enteringScreen?15_000L:10*60_000L;
+        long configured=Scheduler.samplingMinutes(this)*60_000L;
+        long minGap=enteringScreen?15_000L:Math.max(15_000L,configured-8_000L);
         if(now-lastAutoRefreshStarted<minGap)return;
         quotaRefreshRunning=true;
         lastAutoRefreshStarted=now;
