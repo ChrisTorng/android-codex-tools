@@ -57,6 +57,7 @@ final class Scheduler {
     private static final String KEY_RESET_TITLE="reset_credit_title";
     private static final String KEY_RESET_DESCRIPTION="reset_credit_description";
     private static final String KEY_RESET_EXPIRES="reset_credit_expires";
+    private static final String KEY_RESET_EXPIRIES="reset_credit_expiries";
     private static final String KEY_RESET_LAST_CHECK="reset_credit_last_check";
     private static final String KEY_RESET_ERROR="reset_credit_error";
 
@@ -90,7 +91,7 @@ final class Scheduler {
         final long secondaryResetMs;
         final long lastCheckMs;
         final int resetAvailableCount;
-        final String resetCreditId,resetTitle,resetDescription,resetExpires,resetError;
+        final String resetCreditId,resetTitle,resetDescription,resetExpires,resetExpiries,resetError;
 
         Snapshot(SharedPreferences p){
             plan=p.getString(KEY_PLAN,"—");
@@ -108,6 +109,7 @@ final class Scheduler {
             resetTitle=p.getString(KEY_RESET_TITLE,"");
             resetDescription=p.getString(KEY_RESET_DESCRIPTION,"");
             resetExpires=p.getString(KEY_RESET_EXPIRES,"");
+            resetExpiries=p.getString(KEY_RESET_EXPIRIES,"");
             resetError=p.getString(KEY_RESET_ERROR,"");
         }
     }
@@ -253,6 +255,15 @@ final class Scheduler {
                     .putInt(KEY_RESET_AVAILABLE,credits.availableCount)
                     .putLong(KEY_RESET_LAST_CHECK,now)
                     .putString(KEY_RESET_ERROR,"");
+            StringBuilder expiryList=new StringBuilder();
+            int ordinal=1;
+            for(CodexClient.ResetCredit credit:credits.available){
+                if(credit==null)continue;
+                if(expiryList.length()>0)expiryList.append("\n");
+                expiryList.append(ordinal++).append("|")
+                        .append(credit.expiresAt==null?"":credit.expiresAt);
+            }
+            e.putString(KEY_RESET_EXPIRIES,expiryList.toString());
             if(first!=null){
                 e.putString(KEY_RESET_CREDIT_ID,first.id)
                         .putString(KEY_RESET_TITLE,first.title==null?"Full reset":first.title)
@@ -260,7 +271,8 @@ final class Scheduler {
                         .putString(KEY_RESET_EXPIRES,first.expiresAt==null?"":first.expiresAt);
             }else{
                 e.remove(KEY_RESET_CREDIT_ID).remove(KEY_RESET_TITLE)
-                        .remove(KEY_RESET_DESCRIPTION).remove(KEY_RESET_EXPIRES);
+                        .remove(KEY_RESET_DESCRIPTION).remove(KEY_RESET_EXPIRES)
+                        .remove(KEY_RESET_EXPIRIES);
             }
             e.apply();
             UsageHistory.recordSnapshot(c,snapshot(c));
