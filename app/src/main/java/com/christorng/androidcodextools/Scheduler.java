@@ -231,7 +231,8 @@ final class Scheduler {
             CodexClient.Quota q=cli.getQuota();
             storeQuota(c,q,false);
             refreshResetCredits(c,cli,logEvent);
-            if(logEvent)record(c,"配額已更新");
+            UsageHistory.refreshGlobalResetStats(c,false);
+            if(logEvent)record(c,quotaHistorySummary(q));
             scheduleQuotaSampling(c);
             if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
             else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
@@ -815,6 +816,7 @@ final class Scheduler {
             CodexClient.Quota q=cli.getQuota();
             storeQuota(c,q,false);
             refreshResetCredits(c,cli,false);
+            UsageHistory.refreshGlobalResetStats(c,false);
             if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
             else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
         }catch(Exception e){
