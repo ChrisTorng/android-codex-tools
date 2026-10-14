@@ -69,7 +69,7 @@ public class MainActivity extends Activity {
     private TextView accountLine;
     private TextView primaryPercent,primaryMeta;
     private TextView weeklyPercent,weeklyMeta;
-    private QuotaProgressView primaryBar,weeklyBar;
+    private RemainingQuotaView primaryBar,weeklyBar;
     private TextView scheduleSummary,lastEvent,manualTriggerPreview,resetCreditsText;
     private View resetCreditsRow;
     private Button triggerButton,resetCreditsButton;
@@ -185,15 +185,15 @@ public class MainActivity extends Activity {
 
         primaryPercent=new TextView(this);
         primaryMeta=new TextView(this);
-        primaryBar=new QuotaProgressView(this);
+        primaryBar=new RemainingQuotaView(this);
         root.addView(quotaCard("5 小時",primaryPercent,primaryBar,primaryMeta));
 
         weeklyPercent=new TextView(this);
         weeklyMeta=new TextView(this);
-        weeklyBar=new QuotaProgressView(this);
+        weeklyBar=new RemainingQuotaView(this);
         root.addView(quotaCard("週配額",weeklyPercent,weeklyBar,weeklyMeta));
 
-        scheduleSummary=valueText(15);
+        scheduleSummary=valueText(14);
         root.addView(compactCard("下一次排程",scheduleSummary));
 
         manualTriggerPreview=bodyText("");
@@ -480,59 +480,42 @@ public class MainActivity extends Activity {
                 :"ChatGPT 尚未登入");
 
         long now=System.currentTimeMillis();
-        if(q.primaryActive && q.primaryConfirmed){
-            primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
-            double pace=pace(now,q.primaryResetMs,5*60*60_000L);
-            primaryBar.setDarkMode(darkMode);
-            primaryBar.setAxisLabels(
-                    axisTime(q.primaryResetMs-5*60*60_000L,false),
-                    axisTime(q.primaryResetMs,false));
-            primaryBar.setProgress(q.primaryUsed,pace,
-                    String.format(Locale.TAIWAN,"%.0f%%",pace),
-                    hourTicks(q.primaryResetMs,5*60*60_000L));
-        }else if(q.primaryActive){
-            primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.primaryUsed));
-            primaryBar.setDarkMode(darkMode);
-            primaryBar.setAxisLabels("尚未啟動",axisTime(q.primaryResetMs,false));
-            primaryBar.setProgress(q.primaryUsed,-1);
+        List<UsageHistory.Sample> history=UsageHistory.loadSamples(this);
+
+        if(q.primaryActive){
+            double remaining=Math.max(0,100-q.primaryUsed);
+            primaryPercent.setText(String.format(Locale.TAIWAN,"%.0f%% 剩餘",remaining));
+            primaryBar.setData(history,true,q.primaryResetMs,5*60*60_000L,
+                    remaining,q.primaryConfirmed,darkMode);
         }else{
             primaryPercent.setText("—");
-            primaryBar.setDarkMode(darkMode);
-            primaryBar.setAxisLabels("未啟動","");
-            primaryBar.setProgress(0,-1);
+            primaryBar.setData(history,true,0,5*60*60_000L,100,false,darkMode);
         }
 
         if(q.secondaryActive){
-            weeklyPercent.setText(String.format(Locale.TAIWAN,"%.0f%%",q.secondaryUsed));
-            double pace=pace(now,q.secondaryResetMs,7*24*60*60_000L);
-            weeklyBar.setDarkMode(darkMode);
-            weeklyBar.setAxisLabels(
-                    axisTime(q.secondaryResetMs-7*24*60*60_000L,true),
-                    axisTime(q.secondaryResetMs,true));
-            weeklyBar.setProgress(q.secondaryUsed,pace,
-                    String.format(Locale.TAIWAN,"%.0f%%",pace),
-                    midnightTicks(q.secondaryResetMs,7*24*60*60_000L));
+            double remaining=Math.max(0,100-q.secondaryUsed);
+            weeklyPercent.setText(String.format(Locale.TAIWAN,"%.0f%% 剩餘",remaining));
+            weeklyBar.setData(history,false,q.secondaryResetMs,7*24*60*60_000L,
+                    remaining,true,darkMode);
         }else{
             weeklyPercent.setText("—");
-            weeklyBar.setDarkMode(darkMode);
-            weeklyBar.setAxisLabels("無資料","");
-            weeklyBar.setProgress(0,-1);
+            weeklyBar.setData(history,false,0,7*24*60*60_000L,100,false,darkMode);
         }
 
         String mode=Scheduler.mode(this);
         String modeName=Scheduler.MODE_AUTO.equals(mode)?"Reset 後自動":
                 Scheduler.MODE_CUSTOM.equals(mode)?"錨點＋接續":"已關閉";
-        scheduleSummary.setText(modeName+"\n"+Scheduler.formattedNext(this));
+        scheduleSummary.setText(modeName+" · "+Scheduler.formattedNext(this));
 
         boolean activeConfirmed=q.primaryConfirmed && q.primaryResetMs>now;
         triggerButton.setEnabled(!activeConfirmed);
         triggerButton.setAlpha(activeConfirmed?0.38f:1f);
         triggerButton.setTextColor(activeConfirmed?disabledText():textPrimary());
         if(activeConfirmed){
-            manualTriggerPreview.setText("5h 視窗進行中 · 下一次可重新開始：約 "+
+            manualTriggerPreview.setText("5h 進行中 · 可再開始：約 "+
                     Scheduler.formatTime(q.primaryResetMs));
         }else{
-            manualTriggerPreview.setText("若現在觸發成功 · 預估 reset "+
+            manualTriggerPreview.setText("現在觸發 · 預估重置 "+
                     Scheduler.formatTime(now+5*60*60_000L));
         }
 
@@ -1115,25 +1098,25 @@ public class MainActivity extends Activity {
         return Math.max(0,Math.min(100,(now-start)*100.0/duration));
     }
 
-    private View quotaCard(String title,TextView percent,QuotaProgressView bar,TextView meta){
+    private View quotaCard(String title,TextView percent,RemainingQuotaView chart,TextView meta){
         LinearLayout box=new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(12),dp(7),dp(12),dp(7));
+        box.setPadding(dp(10),dp(6),dp(10),dp(5));
         box.setBackground(roundRect(cardBg(),dp(14),borderColor()));
 
         LinearLayout top=new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
         TextView label=sectionLabel(title);
-        top.addView(label,new LinearLayout.LayoutParams(0,dp(27),1));
-        percent.setTextSize(22);
+        top.addView(label,new LinearLayout.LayoutParams(0,dp(25),1));
+        percent.setTextSize(17);
         percent.setTypeface(Typeface.DEFAULT_BOLD);
         percent.setTextColor(textPrimary());
-        top.addView(percent,new LinearLayout.LayoutParams(-2,dp(29)));
+        top.addView(percent,new LinearLayout.LayoutParams(-2,dp(27)));
         box.addView(top);
 
-        box.addView(bar,new LinearLayout.LayoutParams(-1,dp(46)));
+        box.addView(chart,new LinearLayout.LayoutParams(-1,dp(96)));
 
-        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(91));
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(132));
         lp.setMargins(0,dp(3),0,dp(3));
         box.setLayoutParams(lp);
         return box;
