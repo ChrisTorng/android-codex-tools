@@ -16,6 +16,9 @@ final class UsageHistory {
     private static final String KEY_EVENTS="usage_history_events_v1";
     private static final long KEEP_MS=8L*24*60*60_000L;
     private static final String RESET_API="https://codex-reset.com/api/timeline";
+    private static final String RESET_FORECAST_API="https://codex-reset.com/api/forecast";
+    private static final String KEY_GLOBAL_STATS="global_reset_stats_v1";
+    private static final String KEY_GLOBAL_STATS_AT="global_reset_stats_at_v1";
 
     static final class Sample {
         final long at;
@@ -27,6 +30,17 @@ final class UsageHistory {
         Sample(long at,double p,double w,boolean confirmed,long pr,long wr,int banked){
             this.at=at;primaryUsed=p;weeklyUsed=w;primaryConfirmed=confirmed;
             primaryReset=pr;weeklyReset=wr;bankedCount=banked;
+        }
+    }
+
+    static final class GlobalResetStats {
+        final long lastResetAt;
+        final double ageDays,avgDays,medianDays;
+        final int p24,p48;
+        final long medianEstimateAt;
+        GlobalResetStats(long last,double age,double avg,double median,int p24,int p48,long estimate){
+            this.lastResetAt=last;this.ageDays=age;this.avgDays=avg;this.medianDays=median;
+            this.p24=p24;this.p48=p48;this.medianEstimateAt=estimate;
         }
     }
 
@@ -76,6 +90,103 @@ final class UsageHistory {
         long min=now-KEEP_MS;
         events.removeIf(e->e.at<min);
         saveEvents(c,events);
+    }
+
+    static GlobalResetStats loadGlobalResetStats(Context c){
+        try{
+            String raw=prefs(c).getString(KEY_GLOBAL_STATS,"");
+            if(raw==null||raw.isEmpty())return null;
+            JSONObject o=new JSONObject(raw);
+            return new GlobalResetStats(
+                    o.optLong("last",0),
+                    o.optDouble("age",0),
+                    o.optDouble("avg",0),
+                    o.optDouble("median",0),
+                    o.optInt("p24",-1),
+                    o.optInt("p48",-1),
+                    o.optLong("estimate",0));
+        }catch(Exception e){
+            return null;
+        }
+    }
+
+    static void refreshGlobalResetStats(Context c,boolean force){
+        long now=System.currentTimeMillis();
+        long lastCheck=prefs(c).getLong(KEY_GLOBAL_STATS_AT,0);
+        if(!force&&now-lastCheck<6*60*60_000L)return;
+        try{
+            CodexClient cli=new CodexClient(c);
+            String forecastRaw=cli.getPublicJson(
+                    RESET_FORECAST_API,
+                    "Codex-Tools/0.1 (+https://github.com/ChrisTorng/android-codex-tools)");
+            JSONObject forecast=new JSONObject(forecastRaw);
+
+            long lastReset=0;
+            String lastResetText=forecast.optString("last_reset_at","");
+            if(!lastResetText.isEmpty())lastReset=Instant.parse(lastResetText).toEpochMilli();
+            double age=forecast.optDouble("age_days",
+                    lastReset>0?(now-lastReset)/(24d*60*60_000d):0);
+
+            int p24=-1,p48=-1;
+            JSONObject probs=forecast.optJSONObject("probabilities");
+            if(probs!=null){
+                p24=probs.optInt("rounded_24h",-1);
+                p48=probs.optInt("rounded_48h",-1);
+            }
+
+            String timelineRaw=cli.getPublicJson(
+                    RESET_API,
+                    "Codex-Tools/0.1 (+https://github.com/ChrisTorng/android-codex-tools)");
+            JSONObject timeline=new JSONObject(timelineRaw);
+            JSONArray arr=timeline.optJSONArray("events");
+            List<Long> resets=new ArrayList<>();
+            if(arr!=null){
+                for(int i=0;i<arr.length();i++){
+                    JSONObject o=arr.optJSONObject(i);
+                    if(o==null)continue;
+                    if(!"reset".equalsIgnoreCase(o.optString("group","")))continue;
+                    if(!"announced".equalsIgnoreCase(o.optString("announcement_state","")))continue;
+                    String ts=o.optString("effective_at","");
+                    if(ts.isEmpty())ts=o.optString("announced_at","");
+                    if(ts.isEmpty())continue;
+                    try{resets.add(Instant.parse(ts).toEpochMilli());}catch(Exception ignored){}
+                }
+            }
+            resets.sort(Long::compareTo);
+            if(lastReset<=0&&!resets.isEmpty())lastReset=resets.get(resets.size()-1);
+
+            List<Double> gaps=new ArrayList<>();
+            // Use recent verified resets only so the estimate adapts to current cadence.
+            int start=Math.max(1,resets.size()-10);
+            for(int i=start;i<resets.size();i++){
+                long gap=resets.get(i)-resets.get(i-1);
+                if(gap>0)gaps.add(gap/(24d*60*60_000d));
+            }
+            double avg=0,median=0;
+            if(!gaps.isEmpty()){
+                for(double g:gaps)avg+=g;
+                avg/=gaps.size();
+                gaps.sort(Double::compareTo);
+                int n=gaps.size();
+                median=n%2==1?gaps.get(n/2):(gaps.get(n/2-1)+gaps.get(n/2))/2d;
+            }
+            long estimate=lastReset>0&&median>0?lastReset+(long)(median*24d*60*60_000d):0;
+
+            JSONObject out=new JSONObject()
+                    .put("last",lastReset)
+                    .put("age",age)
+                    .put("avg",avg)
+                    .put("median",median)
+                    .put("p24",p24)
+                    .put("p48",p48)
+                    .put("estimate",estimate);
+            prefs(c).edit()
+                    .putString(KEY_GLOBAL_STATS,out.toString())
+                    .putLong(KEY_GLOBAL_STATS_AT,now)
+                    .apply();
+        }catch(Exception ignored){
+            prefs(c).edit().putLong(KEY_GLOBAL_STATS_AT,now).apply();
+        }
     }
 
     static List<Sample> loadSamples(Context c){
