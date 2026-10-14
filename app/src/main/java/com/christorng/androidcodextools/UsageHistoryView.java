@@ -69,21 +69,19 @@ final class UsageHistoryView extends View {
         if(bandH<=0)return;
 
         int band=(int)((y-top)/bandH);
-        if(band<0||band>1)return;
+        if(band<0||band>1){
+            selectedSample=null;selectedEvent=null;return;
+        }
 
         LocalDate date=LocalDate.now().plusDays(band-1L);
         float left=4*d,right=getWidth()-5*d;
         float chartTop=top+band*bandH+3*d;
         float chartBottom=top+(band+1)*bandH-16*d;
 
-        UsageHistory.Sample bestS=null;
-        float bestSD=Float.MAX_VALUE;
+        List<UsageHistory.Sample> daySamples=new ArrayList<>();
         for(UsageHistory.Sample s:samples){
             ZonedDateTime z=Instant.ofEpochMilli(s.at).atZone(ZoneId.systemDefault());
-            if(!z.toLocalDate().equals(date))continue;
-            float sx=timeX(z,left,right);
-            float dx=Math.abs(sx-x);
-            if(dx<bestSD){bestSD=dx;bestS=s;}
+            if(z.toLocalDate().equals(date))daySamples.add(s);
         }
 
         UsageHistory.Event bestE=null;
@@ -95,11 +93,37 @@ final class UsageHistoryView extends View {
             float dx=Math.abs(ex-x);
             if(dx<bestED){bestED=dx;bestE=ev;}
         }
+        if(bestE!=null){
+            selectedEvent=bestE;
+            selectedSample=null;
+            selectedX=timeX(Instant.ofEpochMilli(bestE.at).atZone(ZoneId.systemDefault()),left,right);
+            selectedY=chartTop;
+            return;
+        }
 
-        selectedEvent=bestE;
-        selectedSample=bestE==null?bestS:null;
-        selectedX=x;
-        selectedY=Math.max(chartTop,Math.min(chartBottom,y));
+        if(daySamples.isEmpty()){
+            selectedSample=null;selectedEvent=null;return;
+        }
+        float first=timeX(Instant.ofEpochMilli(daySamples.get(0).at).atZone(ZoneId.systemDefault()),left,right);
+        float last=timeX(Instant.ofEpochMilli(daySamples.get(daySamples.size()-1).at).atZone(ZoneId.systemDefault()),left,right);
+        if(x<first||x>last){
+            selectedSample=null;selectedEvent=null;return;
+        }
+
+        UsageHistory.Sample bestS=null;
+        float bestSD=Float.MAX_VALUE;
+        float bestX=0;
+        for(UsageHistory.Sample s:daySamples){
+            ZonedDateTime z=Instant.ofEpochMilli(s.at).atZone(ZoneId.systemDefault());
+            float sx=timeX(z,left,right);
+            float dx=Math.abs(sx-x);
+            if(dx<bestSD){bestSD=dx;bestS=s;bestX=sx;}
+        }
+
+        selectedEvent=null;
+        selectedSample=bestS;
+        selectedX=bestX;
+        selectedY=chartTop;
     }
 
     @Override protected void onDraw(Canvas canvas){
@@ -229,7 +253,6 @@ final class UsageHistoryView extends View {
         for(UsageHistory.Sample s:samples){
             ZonedDateTime z=Instant.ofEpochMilli(s.at).atZone(ZoneId.systemDefault());
             if(!z.toLocalDate().equals(date))continue;
-            if(primary&&!s.primaryConfirmed)continue;
             day.add(s);
         }
         if(day.isEmpty())return;
@@ -360,17 +383,25 @@ final class UsageHistoryView extends View {
     }
 
     private void drawTooltipBox(Canvas canvas,String text,float d,int fg,int accent){
+        float top=4*d,legendH=24*d;
+        float bandH=(getHeight()-top-legendH)/2f;
+        float bandTop=selectedY;
+        float bandBottom=bandTop+bandH-16*d;
+
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(1.2f*d);
+        paint.setColor(accent);
+        canvas.drawLine(selectedX,bandTop,selectedX,bandBottom,paint);
+
         paint.setTextSize(10*d);
         paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         float pad=6*d;
         float w=Math.min(getWidth()-10*d,paint.measureText(text)+pad*2);
         float x=Math.max(5*d,Math.min(getWidth()-w-5*d,selectedX-w/2f));
-        float y=Math.max(5*d,selectedY-32*d);
+        float y=bandTop+3*d;
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(dark?Color.rgb(48,52,60):Color.WHITE);
         canvas.drawRoundRect(x,y,x+w,y+24*d,6*d,6*d,paint);
-        paint.setColor(accent);
-        canvas.drawCircle(selectedX,selectedY,3*d,paint);
         paint.setColor(fg);
         canvas.drawText(text,x+pad,y+16*d,paint);
     }
