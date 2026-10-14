@@ -6,6 +6,7 @@ import android.graphics.Color;
 import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.view.MotionEvent;
 import android.view.View;
 
 import java.time.Instant;
@@ -14,6 +15,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 final class UsageHistoryView extends View {
     static final class Marker {
@@ -29,14 +31,75 @@ final class UsageHistoryView extends View {
     private List<Marker> markers=new ArrayList<>();
     private boolean dark=false;
 
-    UsageHistoryView(Context c){super(c);}
+    private UsageHistory.Sample selectedSample=null;
+    private UsageHistory.Event selectedEvent=null;
+    private float selectedX=0,selectedY=0;
+
+    UsageHistoryView(Context c){super(c);setClickable(true);}
 
     void setData(List<UsageHistory.Sample> s,List<UsageHistory.Event> e,List<Marker> m,boolean darkMode){
         samples=s==null?new ArrayList<>():s;
         events=e==null?new ArrayList<>():e;
         markers=m==null?new ArrayList<>():m;
         dark=darkMode;
+        selectedSample=null;
+        selectedEvent=null;
         invalidate();
+    }
+
+    @Override public boolean onTouchEvent(MotionEvent e){
+        if(e.getAction()==MotionEvent.ACTION_DOWN||e.getAction()==MotionEvent.ACTION_MOVE){
+            pickNearest(e.getX(),e.getY());
+            invalidate();
+            return true;
+        }
+        if(e.getAction()==MotionEvent.ACTION_UP){
+            performClick();
+            return true;
+        }
+        return super.onTouchEvent(e);
+    }
+
+    @Override public boolean performClick(){super.performClick();return true;}
+
+    private void pickNearest(float x,float y){
+        float d=getResources().getDisplayMetrics().density;
+        float top=4*d,legendH=24*d;
+        float bandH=(getHeight()-top-legendH)/3f;
+        if(bandH<=0)return;
+
+        int band=(int)((y-top)/bandH);
+        if(band<0||band>2)return;
+
+        LocalDate date=LocalDate.now().plusDays(band-1L);
+        float left=4*d,right=getWidth()-5*d;
+        float chartTop=top+band*bandH+3*d;
+        float chartBottom=top+(band+1)*bandH-16*d;
+
+        UsageHistory.Sample bestS=null;
+        float bestSD=Float.MAX_VALUE;
+        for(UsageHistory.Sample s:samples){
+            ZonedDateTime z=Instant.ofEpochMilli(s.at).atZone(ZoneId.systemDefault());
+            if(!z.toLocalDate().equals(date))continue;
+            float sx=timeX(z,left,right);
+            float dx=Math.abs(sx-x);
+            if(dx<bestSD){bestSD=dx;bestS=s;}
+        }
+
+        UsageHistory.Event bestE=null;
+        float bestED=18*d;
+        for(UsageHistory.Event ev:events){
+            ZonedDateTime z=Instant.ofEpochMilli(ev.at).atZone(ZoneId.systemDefault());
+            if(!z.toLocalDate().equals(date))continue;
+            float ex=timeX(z,left,right);
+            float dx=Math.abs(ex-x);
+            if(dx<bestED){bestED=dx;bestE=ev;}
+        }
+
+        selectedEvent=bestE;
+        selectedSample=bestE==null?bestS:null;
+        selectedX=x;
+        selectedY=Math.max(chartTop,Math.min(chartBottom,y));
     }
 
     @Override protected void onDraw(Canvas canvas){
@@ -57,137 +120,177 @@ final class UsageHistoryView extends View {
         float legendH=24*d;
         float bandH=(getHeight()-top-legendH)/3f;
 
+        UsageHistory.Sample latestPrimary=latestSample(true);
+        UsageHistory.Sample latestWeekly=latestSample(false);
+
         for(int i=0;i<3;i++){
             float y0=top+i*bandH;
             float y1=y0+bandH;
-            drawBand(canvas,days[i],labels[i],y0,y1,d,fg,muted,grid);
+            drawBand(canvas,days[i],labels[i],y0,y1,d,fg,muted,grid,latestPrimary,latestWeekly);
         }
 
         drawLegend(canvas,getHeight()-7*d,d,fg);
+
+        if(selectedSample!=null)drawSampleTooltip(canvas,selectedSample,d,fg);
+        else if(selectedEvent!=null)drawEventTooltip(canvas,selectedEvent,d,fg);
+    }
+
+    private UsageHistory.Sample latestSample(boolean primary){
+        for(int i=samples.size()-1;i>=0;i--){
+            UsageHistory.Sample s=samples.get(i);
+            if(primary){
+                if(s.primaryConfirmed&&s.primaryReset>0)return s;
+            }else if(s.weeklyReset>0)return s;
+        }
+        return null;
     }
 
     private void drawBand(Canvas canvas,LocalDate date,String label,float top,float bottom,float d,
-                          int fg,int muted,int grid){
-        float left=28*d;
+                          int fg,int muted,int grid,
+                          UsageHistory.Sample latestPrimary,UsageHistory.Sample latestWeekly){
+        float left=4*d;
         float right=getWidth()-5*d;
         float chartTop=top+3*d;
         float chartBottom=bottom-16*d;
-        float h=Math.max(20*d,chartBottom-chartTop);
 
-        // Day label is overlaid inside the plot.
         paint.setStyle(Paint.Style.FILL);
         paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         paint.setTextSize(11*d);
         paint.setColor(Color.argb(205,Color.red(fg),Color.green(fg),Color.blue(fg)));
-        canvas.drawText(label,left+4*d,chartTop+13*d,paint);
+        canvas.drawText(label,left+6*d,chartTop+13*d,paint);
 
-        // 100 / 50 / 0 remaining scale.
-        paint.setTypeface(android.graphics.Typeface.DEFAULT);
-        paint.setTextSize(8*d);
+        // Horizontal guides only; maximize width by omitting left-side numeric labels.
         for(int p:new int[]{100,50,0}){
             float y=yFor(p,chartTop,chartBottom);
             paint.setColor(grid);
+            paint.setStrokeWidth(1f);
             canvas.drawLine(left,y,right,y,paint);
-            paint.setColor(muted);
-            String s=String.valueOf(p);
-            canvas.drawText(s,1*d,y+3*d,paint);
         }
 
-        // Time ticks.
         String[] ticks={"00","06","12","18","24"};
+        paint.setTypeface(android.graphics.Typeface.DEFAULT);
+        paint.setTextSize(8*d);
         for(int i=0;i<5;i++){
             float x=left+(right-left)*i/4f;
             paint.setColor(grid);
-            paint.setStrokeWidth(1f);
             canvas.drawLine(x,chartTop,x,chartBottom,paint);
             paint.setColor(muted);
             float tw=paint.measureText(ticks[i]);
-            canvas.drawText(ticks[i],x-tw/2f,chartBottom+11*d,paint);
+            canvas.drawText(ticks[i],Math.max(left,Math.min(right-tw,x-tw/2f)),chartBottom+11*d,paint);
         }
 
-        drawSeries(canvas,date,left,right,chartTop,chartBottom,d,true,
-                Color.rgb(47,128,237),5*60*60_000L);
-        drawSeries(canvas,date,left,right,chartTop,chartBottom,d,false,
-                Color.rgb(232,145,52),7*24*60*60_000L);
+        // Current-window ideal guides only. Never connect different reset windows.
+        if(latestPrimary!=null){
+            drawIdealWindow(canvas,date,left,right,chartTop,chartBottom,d,
+                    latestPrimary.primaryReset,5*60*60_000L,Color.rgb(47,128,237));
+        }
+        if(latestWeekly!=null){
+            drawIdealWindow(canvas,date,left,right,chartTop,chartBottom,d,
+                    latestWeekly.weeklyReset,7L*24*60*60_000L,Color.rgb(232,145,52));
+        }
+
+        drawActualSeries(canvas,date,left,right,chartTop,chartBottom,d,true,
+                Color.rgb(47,128,237));
+        drawActualSeries(canvas,date,left,right,chartTop,chartBottom,d,false,
+                Color.rgb(232,145,52));
 
         drawMarkers(canvas,date,left,right,chartTop,chartBottom,d);
         drawEvents(canvas,date,left,right,chartTop,chartBottom,d);
     }
 
-    private void drawSeries(Canvas canvas,LocalDate date,float left,float right,float top,float bottom,
-                            float d,boolean primary,int color,long duration){
-        List<float[]> pts=new ArrayList<>();
+    private void drawIdealWindow(Canvas canvas,LocalDate date,float left,float right,float top,float bottom,
+                                 float d,long reset,long duration,int color){
+        if(reset<=0)return;
+        ZoneId zone=ZoneId.systemDefault();
+        long start=reset-duration;
+        long dayStart=date.atStartOfDay(zone).toInstant().toEpochMilli();
+        long dayEnd=date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli();
+        long segStart=Math.max(start,dayStart);
+        long segEnd=Math.min(reset,dayEnd);
+        if(segStart>=segEnd)return;
 
+        double r0=(reset-segStart)*100.0/duration;
+        double r1=(reset-segEnd)*100.0/duration;
+        ZonedDateTime z0=Instant.ofEpochMilli(segStart).atZone(zone);
+        ZonedDateTime z1=Instant.ofEpochMilli(segEnd).atZone(zone);
+        float x0=timeX(z0,left,right),x1=timeX(z1,left,right);
+        float y0=yFor(r0,top,bottom),y1=yFor(r1,top,bottom);
+
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(1.25f*d);
+        paint.setPathEffect(new DashPathEffect(new float[]{5*d,4*d},0));
+        paint.setColor(Color.argb(175,Color.red(color),Color.green(color),Color.blue(color)));
+        canvas.drawLine(x0,y0,x1,y1,paint);
+        paint.setPathEffect(null);
+    }
+
+    private void drawActualSeries(Canvas canvas,LocalDate date,float left,float right,float top,float bottom,
+                                  float d,boolean primary,int color){
+        List<UsageHistory.Sample> day=new ArrayList<>();
         for(UsageHistory.Sample s:samples){
             ZonedDateTime z=Instant.ofEpochMilli(s.at).atZone(ZoneId.systemDefault());
             if(!z.toLocalDate().equals(date))continue;
             if(primary&&!s.primaryConfirmed)continue;
-
-            double used=primary?s.primaryUsed:s.weeklyUsed;
-            double remaining=100.0-Math.max(0,Math.min(100,used));
-            long reset=primary?s.primaryReset:s.weeklyReset;
-            double ideal=Double.NaN;
-            if(reset>0){
-                long start=reset-duration;
-                ideal=Math.max(0,Math.min(100,(reset-s.at)*100.0/duration));
-                if(s.at<start-60_000L||s.at>reset+60_000L)ideal=Double.NaN;
-            }
-
-            pts.add(new float[]{
-                    timeX(z,left,right),
-                    yFor(remaining,top,bottom),
-                    (float)remaining,
-                    Double.isNaN(ideal)?Float.NaN:yFor(ideal,top,bottom)
-            });
+            day.add(s);
         }
+        if(day.isEmpty())return;
 
-        if(pts.isEmpty())return;
-
-        // Actual area.
         Path area=new Path();
-        area.moveTo(pts.get(0)[0],bottom);
-        for(float[] p:pts)area.lineTo(p[0],p[1]);
-        area.lineTo(pts.get(pts.size()-1)[0],bottom);
-        area.close();
+        Path line=new Path();
+        boolean started=false;
+        float firstX=0,lastX=0;
+        long previousReset=Long.MIN_VALUE;
+
+        for(UsageHistory.Sample s:day){
+            long reset=primary?s.primaryReset:s.weeklyReset;
+            double used=primary?s.primaryUsed:s.weeklyUsed;
+            double remaining=100-Math.max(0,Math.min(100,used));
+            ZonedDateTime z=Instant.ofEpochMilli(s.at).atZone(ZoneId.systemDefault());
+            float x=timeX(z,left,right);
+            float y=yFor(remaining,top,bottom);
+
+            boolean newSegment=started&&previousReset>0&&reset>0&&Math.abs(reset-previousReset)>5*60_000L;
+            if(!started||newSegment){
+                if(started){
+                    area.lineTo(lastX,bottom);
+                    area.close();
+                    drawArea(canvas,area,color,d);
+                    drawLine(canvas,line,color,d);
+                    area.reset();line.reset();
+                }
+                area.moveTo(x,bottom);
+                area.lineTo(x,y);
+                line.moveTo(x,y);
+                firstX=x;
+                started=true;
+            }else{
+                area.lineTo(x,y);
+                line.lineTo(x,y);
+            }
+            lastX=x;
+            previousReset=reset;
+        }
+
+        if(started){
+            area.lineTo(lastX,bottom);
+            area.close();
+            drawArea(canvas,area,color,d);
+            drawLine(canvas,line,color,d);
+        }
+    }
+
+    private void drawArea(Canvas canvas,Path area,int color,float d){
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(Color.argb(dark?42:32,Color.red(color),Color.green(color),Color.blue(color)));
+        paint.setColor(Color.argb(dark?40:30,Color.red(color),Color.green(color),Color.blue(color)));
         canvas.drawPath(area,paint);
+    }
 
-        // Ideal line from the observed window geometry.
-        path.reset();
-        boolean idealStarted=false;
-        for(float[] p:pts){
-            if(Float.isNaN(p[3])){idealStarted=false;continue;}
-            if(!idealStarted){path.moveTo(p[0],p[3]);idealStarted=true;}
-            else path.lineTo(p[0],p[3]);
-        }
+    private void drawLine(Canvas canvas,Path line,int color,float d){
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(1.2f*d);
-        paint.setPathEffect(new DashPathEffect(new float[]{5*d,4*d},0));
-        paint.setColor(Color.argb(170,Color.red(color),Color.green(color),Color.blue(color)));
-        canvas.drawPath(path,paint);
-        paint.setPathEffect(null);
-
-        // Actual line.
-        path.reset();
-        for(int i=0;i<pts.size();i++){
-            float[] p=pts.get(i);
-            if(i==0)path.moveTo(p[0],p[1]); else path.lineTo(p[0],p[1]);
-        }
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(2.1f*d);
+        paint.setStrokeWidth(2.0f*d);
         paint.setColor(color);
-        canvas.drawPath(path,paint);
-
-        // Measured points. Hollow point = observed remaining did not change.
-        for(int i=0;i<pts.size();i++){
-            float[] p=pts.get(i);
-            boolean unchanged=i>0&&Math.abs(p[2]-pts.get(i-1)[2])<0.01f;
-            paint.setStyle(unchanged?Paint.Style.STROKE:Paint.Style.FILL);
-            paint.setStrokeWidth(1.4f*d);
-            paint.setColor(color);
-            canvas.drawCircle(p[0],p[1],2.3f*d,paint);
-        }
+        paint.setPathEffect(null);
+        canvas.drawPath(line,paint);
     }
 
     private void drawMarkers(Canvas canvas,LocalDate date,float left,float right,float top,float bottom,float d){
@@ -204,8 +307,9 @@ final class UsageHistoryView extends View {
             canvas.drawLine(x,top,x,bottom,paint);
             paint.setPathEffect(null);
 
+            // Special schedule points keep their distinct colored circles.
             paint.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(x,top+6*d,3*d,paint);
+            canvas.drawCircle(x,top+6*d,3.2f*d,paint);
         }
     }
 
@@ -219,13 +323,7 @@ final class UsageHistoryView extends View {
 
             paint.setColor(color);
             paint.setStyle(Paint.Style.FILL);
-            path.reset();
-            float y=top+2*d;
-            path.moveTo(x,y);
-            path.lineTo(x-4*d,y+8*d);
-            path.lineTo(x+4*d,y+8*d);
-            path.close();
-            canvas.drawPath(path,paint);
+            canvas.drawCircle(x,top+6*d,4*d,paint);
         }
     }
 
@@ -235,8 +333,8 @@ final class UsageHistoryView extends View {
         paint.setStyle(Paint.Style.FILL);
 
         float x=5*d;
-        x=legend(canvas,x,y,d,Color.rgb(47,128,237),"5h 剩餘");
-        x=legend(canvas,x,y,d,Color.rgb(232,145,52),"週剩餘");
+        x=legend(canvas,x,y,d,Color.rgb(47,128,237),"5h");
+        x=legend(canvas,x,y,d,Color.rgb(232,145,52),"週");
         x=legend(canvas,x,y,d,Color.rgb(46,165,113),"錨點");
         x=legend(canvas,x,y,d,Color.rgb(153,94,220),"自動");
         legend(canvas,x,y,d,Color.rgb(214,65,65),"Reset");
@@ -248,6 +346,39 @@ final class UsageHistoryView extends View {
         paint.setColor(dark?Color.rgb(210,214,220):Color.rgb(80,85,94));
         canvas.drawText(label,x+5*d,y,paint);
         return x+7*d+paint.measureText(label)+8*d;
+    }
+
+    private void drawSampleTooltip(Canvas canvas,UsageHistory.Sample s,float d,int fg){
+        double p=100-Math.max(0,Math.min(100,s.primaryUsed));
+        double w=100-Math.max(0,Math.min(100,s.weeklyUsed));
+        String text=String.format(Locale.TAIWAN,"%s  5h %.0f%% · 週 %.0f%%",clock(s.at),p,w);
+        drawTooltipBox(canvas,text,d,fg,Color.rgb(47,128,237));
+    }
+
+    private void drawEventTooltip(Canvas canvas,UsageHistory.Event e,float d,int fg){
+        String text=clock(e.at)+"  "+e.label;
+        drawTooltipBox(canvas,text,d,fg,Color.rgb(214,65,65));
+    }
+
+    private void drawTooltipBox(Canvas canvas,String text,float d,int fg,int accent){
+        paint.setTextSize(10*d);
+        paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        float pad=6*d;
+        float w=Math.min(getWidth()-10*d,paint.measureText(text)+pad*2);
+        float x=Math.max(5*d,Math.min(getWidth()-w-5*d,selectedX-w/2f));
+        float y=Math.max(5*d,selectedY-32*d);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(dark?Color.rgb(48,52,60):Color.WHITE);
+        canvas.drawRoundRect(x,y,x+w,y+24*d,6*d,6*d,paint);
+        paint.setColor(accent);
+        canvas.drawCircle(selectedX,selectedY,3*d,paint);
+        paint.setColor(fg);
+        canvas.drawText(text,x+pad,y+16*d,paint);
+    }
+
+    private String clock(long ms){
+        ZonedDateTime z=Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault());
+        return String.format(Locale.TAIWAN,"%02d:%02d",z.getHour(),z.getMinute());
     }
 
     private float yFor(double remaining,float top,float bottom){
