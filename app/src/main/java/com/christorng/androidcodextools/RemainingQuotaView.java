@@ -182,8 +182,8 @@ final class RemainingQuotaView extends View {
         paint.setStyle(Paint.Style.FILL);
         paint.setTextSize(9*d);
         paint.setColor(fg);
-        String st=primary?clock(start):shortDateTime(start);
-        String en=primary?clock(resetMs):shortDateTime(resetMs);
+        String st=primary?clock(start):shortDate(start);
+        String en=primary?clock(resetMs):shortDate(resetMs);
         canvas.drawText(st,chartLeft,getHeight()-3*d,paint);
         float ew=paint.measureText(en);
         canvas.drawText(en,Math.max(chartLeft,chartRight-ew),getHeight()-3*d,paint);
@@ -261,6 +261,11 @@ final class RemainingQuotaView extends View {
     private String clock(long ms){
         ZonedDateTime z=Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault());
         return String.format(Locale.TAIWAN,"%02d:%02d",z.getHour(),z.getMinute());
+    }
+
+    private String shortDate(long ms){
+        ZonedDateTime z=Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault());
+        return String.format(Locale.TAIWAN,"%d/%d",z.getMonthValue(),z.getDayOfMonth());
     }
 
     private String shortDateTime(long ms){
