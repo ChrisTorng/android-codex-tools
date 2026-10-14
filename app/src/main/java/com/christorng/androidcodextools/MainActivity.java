@@ -338,6 +338,7 @@ public class MainActivity extends Activity {
         themeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
                 new String[]{"跟隨系統","淺色","深色"}));
         themeSpinner.setSelection(themeSelection());
+        themeSpinner.setPadding(0,0,0,0);
         themeRow.addView(themeSpinner,new LinearLayout.LayoutParams(0,dp(48),1));
         root.addView(themeRow,new LinearLayout.LayoutParams(-1,dp(48)));
 
@@ -349,6 +350,7 @@ public class MainActivity extends Activity {
         sampleSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
                 new String[]{"10 分鐘","15 分鐘","30 分鐘","60 分鐘"}));
         sampleSpinner.setSelection(sampleSelection(Scheduler.samplingMinutes(this)));
+        sampleSpinner.setPadding(0,0,0,0);
         sampleRow.addView(sampleSpinner,new LinearLayout.LayoutParams(0,dp(48),1));
         root.addView(sampleRow,new LinearLayout.LayoutParams(-1,dp(48)));
 
@@ -553,8 +555,11 @@ public class MainActivity extends Activity {
                 g.append("上次 ").append(shortDay(gs.lastResetAt))
                         .append(" · 已 ").append(String.format(Locale.TAIWAN,"%.1f 天",gs.ageDays));
                 if(gs.medianDays>0){
-                    g.append("\n中位 ").append(String.format(Locale.TAIWAN,"%.1f 天",gs.medianDays))
-                            .append(" · 推估 ").append(shortDay(gs.medianEstimateAt));
+                    g.append("\n近期間隔 均 ")
+                            .append(String.format(Locale.TAIWAN,"%.1f",gs.avgDays))
+                            .append(" 天 / 中 ")
+                            .append(String.format(Locale.TAIWAN,"%.1f",gs.medianDays))
+                            .append(" 天 · 推估 ").append(shortDay(gs.medianEstimateAt));
                 }
                 if(gs.p24>=0||gs.p48>=0){
                     g.append(" · ");
