@@ -13,6 +13,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -223,7 +224,7 @@ public class MainActivity extends Activity {
         resetCreditsButton=smallButton("使用 Reset");
         ((LinearLayout)resetCreditsRow).addView(resetCreditsButton,new LinearLayout.LayoutParams(dp(104),dp(40)));
         resetCreditsButton.setOnClickListener(v->confirmReset());
-        resetCreditsRow.setVisibility(View.GONE);
+        resetCreditsRow.setVisibility(View.VISIBLE);
         LinearLayout.LayoutParams resetLp=new LinearLayout.LayoutParams(-1,dp(48));
         resetLp.setMargins(0,dp(3),0,dp(3));
         root.addView(resetCreditsRow,resetLp);
@@ -326,25 +327,27 @@ public class MainActivity extends Activity {
             refreshAll();
         });
 
-        LinearLayout prefRow=new LinearLayout(this);
-        prefRow.setGravity(Gravity.CENTER_VERTICAL);
-
+        LinearLayout themeRow=new LinearLayout(this);
+        themeRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView themeLabel=sectionLabel("主題");
-        prefRow.addView(themeLabel,new LinearLayout.LayoutParams(dp(56),dp(46)));
+        themeRow.addView(themeLabel,new LinearLayout.LayoutParams(dp(88),dp(48)));
         themeSpinner=new Spinner(this);
         themeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
                 new String[]{"跟隨系統","淺色","深色"}));
         themeSpinner.setSelection(themeSelection());
-        prefRow.addView(themeSpinner,new LinearLayout.LayoutParams(0,dp(46),1));
+        themeRow.addView(themeSpinner,new LinearLayout.LayoutParams(0,dp(48),1));
+        root.addView(themeRow,new LinearLayout.LayoutParams(-1,dp(48)));
 
-        TextView sampleLabel=sectionLabel("採樣");
-        prefRow.addView(sampleLabel,new LinearLayout.LayoutParams(dp(56),dp(46)));
+        LinearLayout sampleRow=new LinearLayout(this);
+        sampleRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView sampleLabel=sectionLabel("採樣間隔");
+        sampleRow.addView(sampleLabel,new LinearLayout.LayoutParams(dp(88),dp(48)));
         sampleSpinner=new Spinner(this);
         sampleSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
-                new String[]{"10 分","15 分","30 分","60 分"}));
+                new String[]{"10 分鐘","15 分鐘","30 分鐘","60 分鐘"}));
         sampleSpinner.setSelection(sampleSelection(Scheduler.samplingMinutes(this)));
-        prefRow.addView(sampleSpinner,new LinearLayout.LayoutParams(0,dp(46),1));
-        root.addView(prefRow,new LinearLayout.LayoutParams(-1,dp(48)));
+        sampleRow.addView(sampleSpinner,new LinearLayout.LayoutParams(0,dp(48),1));
+        root.addView(sampleRow,new LinearLayout.LayoutParams(-1,dp(48)));
 
         themeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
             boolean ready=false;
@@ -441,17 +444,20 @@ public class MainActivity extends Activity {
         });
 
         TextView backgroundHelp=bodyText(
-                "Samsung 可能限制休眠 App 的 Alarm / Job。建議把 Codex Tools 加到「永不自動進入休眠」，並確認 App 電池設定不是「受限制」。");
+                "Android 可能因 Doze、電池最佳化或廠商省電策略延後背景 Job。採樣間隔是目標值；重要觸發仍使用精準 Alarm。");
         root.addView(compactCard("背景執行",backgroundHelp));
 
         LinearLayout batteryRow=new LinearLayout(this);
-        Button samsungNeverSleep=smallButton("Samsung 永不休眠");
+        Button batteryOptimization=smallButton("電池最佳化");
         Button appBattery=smallButton("App 電池設定");
-        batteryRow.addView(samsungNeverSleep,half(false));
+        batteryRow.addView(batteryOptimization,half(false));
         batteryRow.addView(appBattery,half(true));
         root.addView(batteryRow,new LinearLayout.LayoutParams(-1,dp(44)));
 
-        samsungNeverSleep.setOnClickListener(v->openSamsungNeverSleep());
+        batteryOptimization.setOnClickListener(v->{
+            try{startActivity(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));}
+            catch(Exception e){toast("無法開啟電池最佳化設定");}
+        });
         appBattery.setOnClickListener(v->{
             try{
                 Intent i=new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -459,6 +465,12 @@ public class MainActivity extends Activity {
                 startActivity(i);
             }catch(Exception e){toast("無法開啟 App 設定");}
         });
+
+        if(Build.MANUFACTURER!=null && Build.MANUFACTURER.toLowerCase(Locale.ROOT).contains("samsung")){
+            Button samsungNeverSleep=smallButton("Samsung：永不休眠 App");
+            root.addView(samsungNeverSleep,new LinearLayout.LayoutParams(-1,dp(42)));
+            samsungNeverSleep.setOnClickListener(v->openSamsungNeverSleep());
+        }
 
         versionText=valueText(13);
         root.addView(compactCard("版本 / 網路",versionText));
