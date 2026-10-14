@@ -65,11 +65,11 @@ final class UsageHistoryView extends View {
     private void pickNearest(float x,float y){
         float d=getResources().getDisplayMetrics().density;
         float top=4*d,legendH=24*d;
-        float bandH=(getHeight()-top-legendH)/3f;
+        float bandH=(getHeight()-top-legendH)/2f;
         if(bandH<=0)return;
 
         int band=(int)((y-top)/bandH);
-        if(band<0||band>2)return;
+        if(band<0||band>1)return;
 
         LocalDate date=LocalDate.now().plusDays(band-1L);
         float left=4*d,right=getWidth()-5*d;
@@ -113,17 +113,17 @@ final class UsageHistoryView extends View {
         canvas.drawColor(bg);
 
         LocalDate today=LocalDate.now();
-        LocalDate[] days={today.minusDays(1),today,today.plusDays(1)};
-        String[] labels={"昨天","今天","明天"};
+        LocalDate[] days={today.minusDays(1),today};
+        String[] labels={"昨天","今天"};
 
         float top=4*d;
         float legendH=24*d;
-        float bandH=(getHeight()-top-legendH)/3f;
+        float bandH=(getHeight()-top-legendH)/2f;
 
         UsageHistory.Sample latestPrimary=latestSample(true);
         UsageHistory.Sample latestWeekly=latestSample(false);
 
-        for(int i=0;i<3;i++){
+        for(int i=0;i<2;i++){
             float y0=top+i*bandH;
             float y1=y0+bandH;
             drawBand(canvas,days[i],labels[i],y0,y1,d,fg,muted,grid,latestPrimary,latestWeekly);
@@ -211,9 +211,8 @@ final class UsageHistoryView extends View {
 
         double r0=(reset-segStart)*100.0/duration;
         double r1=(reset-segEnd)*100.0/duration;
-        ZonedDateTime z0=Instant.ofEpochMilli(segStart).atZone(zone);
-        ZonedDateTime z1=Instant.ofEpochMilli(segEnd).atZone(zone);
-        float x0=timeX(z0,left,right),x1=timeX(z1,left,right);
+        float x0=timeXForDay(segStart,date,left,right);
+        float x1=timeXForDay(segEnd,date,left,right);
         float y0=yFor(r0,top,bottom),y1=yFor(r1,top,bottom);
 
         paint.setStyle(Paint.Style.STROKE);
@@ -379,6 +378,15 @@ final class UsageHistoryView extends View {
     private String clock(long ms){
         ZonedDateTime z=Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault());
         return String.format(Locale.TAIWAN,"%02d:%02d",z.getHour(),z.getMinute());
+    }
+
+    private float timeXForDay(long at,LocalDate date,float left,float right){
+        ZoneId zone=ZoneId.systemDefault();
+        long dayStart=date.atStartOfDay(zone).toInstant().toEpochMilli();
+        long dayEnd=date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli();
+        double p=(at-dayStart)/(double)(dayEnd-dayStart);
+        p=Math.max(0,Math.min(1,p));
+        return (float)(left+(right-left)*p);
     }
 
     private float yFor(double remaining,float top,float bottom){
