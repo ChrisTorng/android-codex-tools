@@ -765,6 +765,7 @@ public class MainActivity extends Activity {
             list.addView(empty);
             return;
         }
+
         for(ScheduleConfig.Rule rule:rules){
             LinearLayout card=new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
@@ -775,28 +776,52 @@ public class MainActivity extends Activity {
                     dp(12),
                     conflict?Color.rgb(230,149,45):borderColor()));
 
-            LinearLayout row=new LinearLayout(this);
-            row.setGravity(Gravity.CENTER_VERTICAL);
+            // Row 1: enabled | time | delete
+            LinearLayout top=new LinearLayout(this);
+            top.setGravity(Gravity.CENTER_VERTICAL);
 
             Switch enabled=new Switch(this);
             enabled.setText("啟用");
+            enabled.setTextSize(13);
             enabled.setChecked(rule.enabled);
-            enabled.setOnCheckedChangeListener((b,v)->rule.enabled=v);
-            row.addView(enabled,new LinearLayout.LayoutParams(0,dp(46),1));
+            enabled.setOnCheckedChangeListener((b,v)->{
+                rule.enabled=v;
+                if(externalRedraw!=null)externalRedraw.run();
+            });
+            top.addView(enabled,new LinearLayout.LayoutParams(0,dp(46),1));
 
             Button time=smallButton(rule.timeText());
             time.setOnClickListener(v->new TimePickerDialog(this,(TimePicker p,int h,int m)->{
-                rule.hour=h;rule.minute=m;
+                rule.hour=h;
+                rule.minute=m;
                 if(externalRedraw!=null)externalRedraw.run();
                 else renderRuleRows(list,rules,weekly,null);
             },rule.hour,rule.minute,true).show());
-            row.addView(time,new LinearLayout.LayoutParams(dp(92),dp(44)));
+            top.addView(time,new LinearLayout.LayoutParams(dp(96),dp(44)));
+
+            Button del=smallButton("×");
+            del.setOnClickListener(v->{
+                rules.remove(rule);
+                if(externalRedraw!=null)externalRedraw.run();
+                else renderRuleRows(list,rules,weekly,null);
+            });
+            LinearLayout.LayoutParams delLp=new LinearLayout.LayoutParams(dp(46),dp(44));
+            delLp.setMargins(dp(6),0,0,0);
+            top.addView(del,delLp);
+            card.addView(top);
+
+            // Row 2: explicit continuation label + roomy spinner.
+            LinearLayout continuation=new LinearLayout(this);
+            continuation.setGravity(Gravity.CENTER_VERTICAL);
+            TextView autoLabel=bodyText("後續自動");
+            autoLabel.setTextSize(12);
+            continuation.addView(autoLabel,new LinearLayout.LayoutParams(dp(76),dp(44)));
 
             Spinner auto=new Spinner(this);
             int maxAuto=ScheduleConfig.maxSafeAutoCount(rule,rules,weekly);
             List<String> countLabels=new ArrayList<>();
             countLabels.add("不接續");
-            for(int n=1;n<=maxAuto;n++)countLabels.add("接續 "+n);
+            for(int n=1;n<=maxAuto;n++)countLabels.add("接續 "+n+" 次");
             ArrayAdapter<String> countAdapter=new ArrayAdapter<>(
                     this,android.R.layout.simple_spinner_item,countLabels);
             countAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -814,16 +839,8 @@ public class MainActivity extends Activity {
                 }
                 @Override public void onNothingSelected(android.widget.AdapterView<?> p){}
             });
-            row.addView(auto,new LinearLayout.LayoutParams(dp(112),dp(44)));
-
-            Button del=smallButton("×");
-            del.setOnClickListener(v->{
-                rules.remove(rule);
-                if(externalRedraw!=null)externalRedraw.run();
-                else renderRuleRows(list,rules,weekly,null);
-            });
-            row.addView(del,new LinearLayout.LayoutParams(dp(46),dp(44)));
-            card.addView(row);
+            continuation.addView(auto,new LinearLayout.LayoutParams(0,dp(44),1));
+            card.addView(continuation);
 
             if(weekly){
                 LinearLayout days=new LinearLayout(this);
@@ -843,13 +860,21 @@ public class MainActivity extends Activity {
                         if(externalRedraw!=null)externalRedraw.run();
                         else renderRuleRows(list,rules,weekly,null);
                     });
-                    days.addView(t,new LinearLayout.LayoutParams(0,dp(40),1));
+                    days.addView(t,new LinearLayout.LayoutParams(0,dp(38),1));
                 }
                 card.addView(days);
             }
 
-            TextView estimate=bodyText((conflict?"⚠ 5 小時內與其他錨點衝突 · ":"預估：")+
-                    ScheduleConfig.estimateRule(rule));
+            int safe=ScheduleConfig.maxSafeAutoCount(rule,rules,weekly);
+            String estimateText=ScheduleConfig.estimateRule(rule);
+            if(conflict){
+                estimateText="⚠ 排程衝突 · "+estimateText;
+            }else if(rule.autoCount>=safe && safe>0){
+                estimateText="預估："+estimateText+" · 已達此錨點安全上限";
+            }else{
+                estimateText="預估："+estimateText;
+            }
+            TextView estimate=bodyText(estimateText);
             estimate.setTextSize(12);
             if(conflict)estimate.setTextColor(warningText());
             estimate.setPadding(0,dp(2),0,0);
