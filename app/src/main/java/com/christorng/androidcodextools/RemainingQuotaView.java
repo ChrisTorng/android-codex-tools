@@ -85,7 +85,7 @@ final class RemainingQuotaView extends View {
         int muted=dark?Color.rgb(145,151,161):Color.rgb(115,121,131);
         int grid=dark?Color.rgb(59,64,73):Color.rgb(226,229,234);
         int actual=primary?Color.rgb(47,128,237):Color.rgb(232,145,52);
-        int ideal=dark?Color.rgb(124,132,145):Color.rgb(142,149,160);
+        int ideal=actual;
 
         chartLeft=5*d;
         chartRight=getWidth()-5*d;
@@ -218,7 +218,7 @@ final class RemainingQuotaView extends View {
                 paint.setColor(grid);
                 canvas.drawLine(x,chartTop,x,chartBottom,paint);
                 paint.setColor(muted);
-                String label=String.format(Locale.TAIWAN,"%d/%d",tick.getMonthValue(),tick.getDayOfMonth());
+                String label=String.valueOf(tick.getDayOfMonth());
                 float w=paint.measureText(label);
                 canvas.drawText(label,Math.max(chartLeft,Math.min(chartRight-w,x-w/2f)),getHeight()-3*d,paint);
                 tick=tick.plusDays(1);
