@@ -280,12 +280,12 @@ public class MainActivity extends Activity {
         root.setPadding(dp(12),dp(4),dp(12),dp(8));
 
         historyChart=new UsageHistoryView(this);
-        root.addView(historyChart,new LinearLayout.LayoutParams(-1,dp(430)));
+        root.addView(historyChart,new LinearLayout.LayoutParams(-1,0,1));
 
-        TextView source=bodyText("Global Reset 資料：codex-reset.com · 虛線為排程預估，不代表未來實際用量");
-        source.setTextSize(11);
+        TextView source=bodyText("Global Reset：codex-reset.com · 實線＝實際剩餘 · 虛線＝理想/排程");
+        source.setTextSize(10);
         source.setSingleLine(true);
-        root.addView(source,new LinearLayout.LayoutParams(-1,dp(28)));
+        root.addView(source,new LinearLayout.LayoutParams(-1,dp(22)));
 
         LinearLayout listCard=new LinearLayout(this);
         listCard.setOrientation(LinearLayout.VERTICAL);
@@ -299,7 +299,7 @@ public class MainActivity extends Activity {
         historyList.setPadding(0,dp(3),0,dp(6));
         scroll.addView(historyList,new ScrollView.LayoutParams(-1,-2));
         listCard.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-        root.addView(listCard,new LinearLayout.LayoutParams(-1,0,1));
+        root.addView(listCard,new LinearLayout.LayoutParams(-1,dp(150)));
 
         return root;
     }
@@ -721,6 +721,22 @@ public class MainActivity extends Activity {
             updateSuggestedAddButton(add,draft,weekly,true);
         };
         redraw[0].run();
+
+        if(weekly){
+            Button recommended=actionButton("套用建議：06:00 ＋ 接續 3 次");
+            container.addView(recommended,new LinearLayout.LayoutParams(-1,dp(44)));
+            recommended.setOnClickListener(v->{
+                draft.clear();
+                ScheduleConfig.Rule r=new ScheduleConfig.Rule();
+                r.hour=6;
+                r.minute=0;
+                r.autoCount=3;
+                for(int i=0;i<7;i++)r.days[i]=true;
+                draft.add(r);
+                redraw[0].run();
+            });
+        }
+
         add.setOnClickListener(v->{
             ScheduleConfig.Rule r=ScheduleConfig.suggestedNewRule(draft,weekly);
             if(r==null){
