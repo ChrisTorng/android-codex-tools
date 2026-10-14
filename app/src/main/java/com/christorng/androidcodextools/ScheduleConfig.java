@@ -359,7 +359,7 @@ final class ScheduleConfig {
                 days.append(names[i]);
             }
         }
-        return (days.length()==0?"未選":days.toString())+"  "+estimateRule(r);
+        return (days.length()==0?"未選":days.toString())+"\n"+estimateRule(r);
     }
 
     private static List<Rule> parseRules(String raw,boolean weekly){
@@ -371,7 +371,7 @@ final class ScheduleConfig {
                 Rule r=new Rule();
                 r.id=o.optString("id",UUID.randomUUID().toString());
                 r.enabled=o.optBoolean("enabled",true);
-                r.hour=o.optInt("hour",9);
+                r.hour=o.optInt("hour",6);
                 r.minute=o.optInt("minute",0);
                 r.autoCount=Math.max(0,Math.min(8,o.optInt("autoCount",0)));
                 String ds=o.optString("days",weekly?"1111111":"1111111");
