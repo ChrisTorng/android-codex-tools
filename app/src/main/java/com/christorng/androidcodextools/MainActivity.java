@@ -532,14 +532,14 @@ public class MainActivity extends Activity {
         }
 
         boolean resetEligible=Scheduler.resetEligibleNow(this);
-        if(resetEligible && q.resetAvailableCount>0 &&
-                q.resetCreditId!=null && !q.resetCreditId.isEmpty()){
-            resetCreditsRow.setVisibility(View.VISIBLE);
-            String expiry=q.resetExpires==null||q.resetExpires.isEmpty()?"":(" · 到期 "+formatIsoTime(q.resetExpires));
-            resetCreditsText.setText("Banked reset "+q.resetAvailableCount+" 次可用"+expiry);
-        }else{
-            resetCreditsRow.setVisibility(View.GONE);
-        }
+        boolean hasReset=q.resetAvailableCount>0 && q.resetCreditId!=null && !q.resetCreditId.isEmpty();
+        resetCreditsRow.setVisibility(View.VISIBLE);
+        String expiry=q.resetExpires==null||q.resetExpires.isEmpty()?"":(" · 到期 "+formatIsoTime(q.resetExpires));
+        resetCreditsText.setText("Banked Reset "+q.resetAvailableCount+" 次"+expiry);
+        resetCreditsButton.setText("Reset");
+        resetCreditsButton.setEnabled(resetEligible&&hasReset);
+        resetCreditsButton.setAlpha(resetEligible&&hasReset?1f:0.38f);
+        resetCreditsButton.setTextColor(resetEligible&&hasReset?textPrimary():disabledText());
 
         if(lastEvent!=null)lastEvent.setText(Scheduler.history(this));
     }
@@ -571,19 +571,31 @@ public class MainActivity extends Activity {
         historyChart.setData(samples,events,forecastMarkers(),darkMode);
 
         StringBuilder list=new StringBuilder();
-        for(int i=events.size()-1;i>=0;i--){
+        if(!samples.isEmpty()){
+            UsageHistory.Sample last=samples.get(samples.size()-1);
+            list.append("最近採樣 ").append(Scheduler.formatTime(last.at))
+                    .append(" · 5h ").append(String.format(Locale.TAIWAN,"%.0f%%",Math.max(0,100-last.primaryUsed)))
+                    .append(" · 週 ").append(String.format(Locale.TAIWAN,"%.0f%%",Math.max(0,100-last.weeklyUsed)))
+                    .append("\n");
+        }else{
+            list.append("尚無配額採樣\n");
+        }
+
+        int eventShown=0;
+        for(int i=events.size()-1;i>=0 && eventShown<6;i--,eventShown++){
             UsageHistory.Event e=events.get(i);
-            if(list.length()>0)list.append("\n");
-            list.append(Scheduler.formatTime(e.at)).append(" · ").append(e.label);
-            if(e.source!=null&&!e.source.isEmpty())list.append(" · ").append(e.source);
+            list.append(Scheduler.formatTime(e.at)).append(" · ").append(e.label).append("\n");
         }
-        if(list.length()==0){
-            list.append("尚未偵測到 Reset 事件。");
+
+        int sampleShown=0;
+        for(int i=samples.size()-1;i>=0 && sampleShown<8;i--,sampleShown++){
+            UsageHistory.Sample s=samples.get(i);
+            list.append(Scheduler.formatTime(s.at))
+                    .append(" · 5h ").append(String.format(Locale.TAIWAN,"%.0f%%",Math.max(0,100-s.primaryUsed)))
+                    .append(" · 週 ").append(String.format(Locale.TAIWAN,"%.0f%%",Math.max(0,100-s.weeklyUsed)));
+            if(i>0&&sampleShown<7)list.append("\n");
         }
-        list.append("\n\n配額樣本：").append(samples.size()).append(" 筆 · 每 ")
-                .append(Scheduler.samplingMinutes(this)).append(" 分鐘目標採樣")
-                .append("\n\n詳細紀錄\n").append(Scheduler.history(this));
-        if(historyList!=null)historyList.setText(list.toString());
+        if(historyList!=null)historyList.setText(list.toString().trim());
     }
 
     private List<UsageHistoryView.Marker> forecastMarkers(){
@@ -618,7 +630,8 @@ public class MainActivity extends Activity {
         PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
         boolean ignoringDoze=pm!=null && pm.isIgnoringBatteryOptimizations(getPackageName());
         exactAlarmText.setText((Scheduler.canExact(this)?"Exact Alarm 已允許":"Exact Alarm 尚未允許")+
-                " · Doze 白名單："+(ignoringDoze?"是":"否"));
+                " · 電池白名單："+(ignoringDoze?"是":"否")+
+                " · 採樣目標 "+Scheduler.samplingMinutes(this)+" 分");
         if(ntfyEdit!=null&&!ntfyEdit.hasFocus()){
             ntfySavedValue=Scheduler.ntfyUrl(this);
             ntfyEdit.setText(ntfySavedValue);
