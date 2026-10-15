@@ -116,10 +116,12 @@ final class RemainingQuotaView extends View {
             canvas.drawLine(chartLeft,y,chartRight,y,paint);
         }
 
-        if(resetMs<=0){
+        if(resetMs<=0 || (primary&&!active)){
             paint.setColor(muted);
             paint.setTextSize(11*d);
-            canvas.drawText(active?"等待確認視窗":"未啟動",chartLeft+8*d,(chartTop+chartBottom)/2,paint);
+            canvas.drawText(primary&&!active?"5h 尚未啟動 · 等待觸發":
+                    active?"等待確認視窗":"未啟動",
+                    chartLeft+8*d,(chartTop+chartBottom)/2,paint);
             return;
         }
 

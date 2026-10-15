@@ -160,13 +160,11 @@ final class UsageHistoryView extends View {
     }
 
     private UsageHistory.Sample latestSample(boolean primary){
-        for(int i=samples.size()-1;i>=0;i--){
-            UsageHistory.Sample s=samples.get(i);
-            if(primary){
-                if(s.primaryConfirmed&&s.primaryReset>0)return s;
-            }else if(s.weeklyReset>0)return s;
-        }
-        return null;
+        if(samples.isEmpty())return null;
+        // Never resurrect an old confirmed 5h window after a global reset.
+        UsageHistory.Sample latest=samples.get(samples.size()-1);
+        if(primary)return latest.primaryConfirmed&&latest.primaryReset>0?latest:null;
+        return latest.weeklyReset>0?latest:null;
     }
 
     private void drawBand(Canvas canvas,LocalDate date,String label,float top,float bottom,float d,
@@ -341,7 +339,8 @@ final class UsageHistoryView extends View {
             if(!z.toLocalDate().equals(date))continue;
             float x=timeX(z,left,right);
             int color=e.type.contains("banked")?Color.rgb(230,176,45):
-                    e.type.contains("global")?Color.rgb(214,65,65):Color.rgb(120,126,136);
+                    (e.type.contains("global")||e.type.contains("unexpected_reset"))
+                            ?Color.rgb(214,65,65):Color.rgb(120,126,136);
 
             paint.setColor(color);
             paint.setStyle(Paint.Style.FILL);

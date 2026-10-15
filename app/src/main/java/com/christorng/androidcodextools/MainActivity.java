@@ -72,7 +72,7 @@ public class MainActivity extends Activity {
     private TextView primaryPercent,primaryMeta;
     private TextView weeklyPercent,weeklyMeta;
     private RemainingQuotaView primaryBar,weeklyBar;
-    private TextView scheduleSummary,lastEvent,manualTriggerPreview,resetCreditsText,globalResetText;
+    private TextView scheduleSummary,lastEvent,manualTriggerPreview,resetCreditsText,resetCreditsTitle,globalResetText;
     private View resetCreditsRow;
     private Button triggerButton,resetCreditsButton;
 
@@ -224,13 +224,23 @@ public class MainActivity extends Activity {
 
         LinearLayout resetTop=new LinearLayout(this);
         resetTop.setGravity(Gravity.CENTER_VERTICAL);
-        TextView resetTitle=sectionLabel("Banked Reset");
-        resetTitle.setTextColor(textPrimary());
-        resetTop.addView(resetTitle,new LinearLayout.LayoutParams(0,dp(34),1));
-        resetCreditsButton=smallButton("Reset");
+        // The heading itself becomes the action when a reset is useful.
+        resetCreditsTitle=sectionLabel("Banked Reset");
+        resetCreditsTitle.setTextColor(textPrimary());
+        resetCreditsTitle.setPadding(dp(6),0,0,0);
+        resetTop.addView(resetCreditsTitle,new LinearLayout.LayoutParams(-1,dp(34)));
+        resetCreditsButton=smallButton("Banked Reset");
         resetCreditsButton.setTypeface(Typeface.DEFAULT_BOLD);
+        resetCreditsButton.setTextSize(13);
+        resetCreditsButton.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
+        resetCreditsButton.setMinHeight(0);
+        resetCreditsButton.setMinimumHeight(0);
+        resetCreditsButton.setPadding(dp(6),0,dp(6),0);
+        resetCreditsButton.setBackground(roundRect(ACCENT,dp(8),ACCENT));
+        resetCreditsButton.setTextColor(Color.WHITE);
         resetCreditsButton.setOnClickListener(v->confirmReset());
-        resetTop.addView(resetCreditsButton,new LinearLayout.LayoutParams(dp(84),dp(34)));
+        resetCreditsButton.setVisibility(View.GONE);
+        resetTop.addView(resetCreditsButton,new LinearLayout.LayoutParams(-1,dp(34)));
         resetCard.addView(resetTop);
 
         resetCreditsText=valueText(12);
@@ -554,25 +564,32 @@ public class MainActivity extends Activity {
         boolean resetEligible=Scheduler.resetEligibleNow(this);
         boolean hasReset=q.resetAvailableCount>0 && q.resetCreditId!=null && !q.resetCreditId.isEmpty();
         resetCreditsRow.setVisibility(View.VISIBLE);
-        StringBuilder resetInfo=new StringBuilder();
-        resetInfo.append(q.resetAvailableCount).append(" 次可用");
+        boolean armed=Scheduler.isBankedResetArmed(this);
+        String resetLabel="Banked Reset ×"+q.resetAvailableCount+(armed?" · 待命":"");
+        resetCreditsTitle.setText(resetLabel);
+        resetCreditsButton.setText(resetLabel);
+        // Can arm when unused, use now when partially used, or cancel when armed.
+        resetCreditsTitle.setVisibility(hasReset||armed?View.GONE:View.VISIBLE);
+        resetCreditsButton.setVisibility(hasReset||armed?View.VISIBLE:View.GONE);
+        resetCreditsButton.setEnabled(hasReset||armed);
+
+        StringBuilder expiryInfo=new StringBuilder();
         if(q.resetExpiries!=null&&!q.resetExpiries.isEmpty()){
             String[] entries=q.resetExpiries.split("\n");
             for(String entry:entries){
                 String[] parts=entry.split("\\|",2);
-                String n=parts.length>0?parts[0]:"";
                 String iso=parts.length>1?parts[1]:"";
                 if(iso.isEmpty())continue;
-                resetInfo.append("\n#").append(n).append(" 到期 ").append(formatIsoMinute(iso));
+                if(expiryInfo.length()>0)expiryInfo.append(" · ");
+                expiryInfo.append(formatIsoMinute(iso));
             }
         }else if(q.resetExpires!=null&&!q.resetExpires.isEmpty()){
-            resetInfo.append("\n#1 到期 ").append(formatIsoMinute(q.resetExpires));
+            expiryInfo.append(formatIsoMinute(q.resetExpires));
         }
-        resetCreditsText.setText(resetInfo.toString());
-        resetCreditsButton.setText("Reset");
-        resetCreditsButton.setEnabled(resetEligible&&hasReset);
-        resetCreditsButton.setAlpha(resetEligible&&hasReset?1f:0.72f);
-        resetCreditsButton.setTextColor(resetEligible&&hasReset?textPrimary():textSecondary());
+        String info=expiryInfo.length()==0?"":"到期 "+expiryInfo;
+        if(armed)info="用盡後自動重置"+(info.isEmpty()?"":" · "+info);
+        resetCreditsText.setText(info);
+        resetCreditsText.setVisibility(info.isEmpty()?View.GONE:View.VISIBLE);
 
         UsageHistory.GlobalResetStats gs=UsageHistory.loadGlobalResetStats(this);
         if(globalResetText!=null){
@@ -595,6 +612,18 @@ public class MainActivity extends Activity {
                     if(gs.p48>=0)g.append(" / 48h ").append(gs.p48).append("%");
                 }
                 globalResetText.setText(g.toString());
+            }
+            // Account evidence is independent of third-party public confirmation.
+            // Do not report an upcoming public announcement as a confirmed reset.
+            List<UsageHistory.Event> recentEvents=UsageHistory.loadEvents(this);
+            for(int i=recentEvents.size()-1;i>=0;i--){
+                UsageHistory.Event event=recentEvents.get(i);
+                if(!"unexpected_reset".equals(event.type))continue;
+                if(gs==null||gs.lastResetAt<event.at-60*60_000L){
+                    globalResetText.setText("帳戶疑似重置 "+Scheduler.formatTime(event.at)+
+                            " · 待公開確認\n"+globalResetText.getText());
+                }
+                break;
             }
         }
 
@@ -1044,31 +1073,73 @@ public class MainActivity extends Activity {
 
     private void confirmReset(){
         Scheduler.Snapshot q=Scheduler.snapshot(this);
-        if(!Scheduler.resetEligibleNow(this)){
-            toast("5 小時與週配額都尚未用盡");
+        boolean armed=Scheduler.isBankedResetArmed(this);
+        boolean hasReset=q.resetAvailableCount>0 &&
+                q.resetCreditId!=null && !q.resetCreditId.isEmpty();
+        if(armed){
+            new AlertDialog.Builder(this)
+                    .setTitle("Banked Reset 已待命")
+                    .setMessage("當 5h 或週配額任一用盡，App 會在背景採樣偵測後自動使用一次預存重置。")
+                    .setPositiveButton("立即重置",(d,w)->confirmResetNow(true))
+                    .setNeutralButton("取消待命",(d,w)->{
+                        Scheduler.cancelArmedBankedReset(this);
+                        refreshAll();
+                    })
+                    .setNegativeButton("返回",null).show();
             return;
         }
+        if(!hasReset){
+            toast("目前沒有可用的 Banked Reset");
+            return;
+        }
+        if(Scheduler.resetEligibleNow(this)){
+            confirmResetNow(false);
+            return;
+        }
+        // Do not spend a saved reset simply because a window has partial usage.
+        new AlertDialog.Builder(this)
+                .setTitle("Banked Reset · 選擇使用時機")
+                .setItems(new String[]{
+                        "用盡後自動重置（一次）",
+                        "現在立即重置"
+                },(d,which)->{
+                    if(which==0){
+                        Scheduler.armBankedReset(this);
+                        refreshAll();
+                        // Recheck server state; cached usage may have changed.
+                        runCheck();
+                    }else{
+                        confirmResetNow(true);
+                    }
+                })
+                .setNegativeButton("取消",null)
+                .show();
+    }
+
+    private void confirmResetNow(boolean allowPartial){
+        Scheduler.Snapshot q=Scheduler.snapshot(this);
         if(q.resetAvailableCount<=0||q.resetCreditId==null||q.resetCreditId.isEmpty()){
-            toast("目前沒有可用的 banked reset");
+            toast("目前沒有可用的 Banked Reset");
             return;
         }
         String title=q.resetTitle==null||q.resetTitle.isEmpty()?"Full reset":q.resetTitle;
         String detail=q.resetDescription==null?"":q.resetDescription;
-        String expiry=q.resetExpires==null||q.resetExpires.isEmpty()?"":"\n到期："+formatIsoTime(q.resetExpires);
+        String expiry=q.resetExpires==null||q.resetExpires.isEmpty()?"":"\\n到期："+formatIsoTime(q.resetExpires);
         new AlertDialog.Builder(this)
-                .setTitle("使用 "+title+"？")
-                .setMessage("這會消耗 1 個 banked reset。只有 5 小時或週配額已用盡時才會執行；完成後 App 會重新查詢實際 quota，不會自動送 Codex request。"+
-                        (detail.isEmpty()?"":"\n\n"+detail)+expiry)
+                .setTitle("立即使用 "+title+"？")
+                .setMessage("將立即刷新已使用的 5h／週配額，並改變週配額重置日期；可能浪費尚未用完的額度。"+
+                        "只有成功刷新至少一個視窗，才會消耗 1 次 Banked Reset。"+
+                        "若兩個視窗都尚未使用，會略過本次操作。"+
+                        "\\n本操作不會主動送出 Codex request。"+
+                        (detail.isEmpty()?"":"\\n\\n"+detail)+expiry)
                 .setNegativeButton("取消",null)
-                .setPositiveButton("使用 Reset",(d,w)->{
+                .setPositiveButton("立即重置",(d,w)->{
                     resetCreditsButton.setEnabled(false);
-                    toast("正在 Reset…");
+                    toast("正在重置…");
                     new Thread(()->{
-                        Scheduler.consumeResetCredit(getApplicationContext());
-                        runOnUiThread(()->{
-                            resetCreditsButton.setEnabled(true);
-                            refreshAll();
-                        });
+                        if(allowPartial)Scheduler.consumeResetCreditNow(getApplicationContext());
+                        else Scheduler.consumeResetCredit(getApplicationContext());
+                        runOnUiThread(this::refreshAll);
                     },"codex-reset").start();
                 }).show();
     }
@@ -1080,9 +1151,12 @@ public class MainActivity extends Activity {
             toast("5 小時視窗仍在進行中");
             return;
         }
-        String timing=(q.primaryConfirmed && q.primaryResetMs>now)
-                ?"目前 5 小時視窗已啟動，這次 request 不會延長視窗。\n目前 reset："+Scheduler.formatTime(q.primaryResetMs)
-                :"若觸發成功，預估 reset："+Scheduler.formatTime(now+5*60*60_000L);
+        String timing="若觸發成功，預估 reset："+Scheduler.formatTime(now+5*60*60_000L);
+        ScheduleConfig.Slot nextAnchor=ScheduleConfig.nextAnchor(this,now+1_000L);
+        if(nextAnchor!=null && nextAnchor.whenMs<now+5*60*60_000L-60_000L){
+            timing+="\n注意：這會使 "+Scheduler.formatTime(nextAnchor.whenMs)+
+                    " 的錨點落在 5h 視窗內，該錨點及其接續排程可能被略過。";
+        }
         new AlertDialog.Builder(this)
                 .setTitle("立即觸發？")
                 .setMessage("會送出最小 Codex request 並消耗配額。\n\n"+timing)

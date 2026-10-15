@@ -42,6 +42,7 @@ final class Scheduler {
 
     private static final String KEY_PLAN="quota_plan";
     private static final String KEY_ALLOWED="quota_allowed";
+    private static final String KEY_LIMIT_REACHED="quota_limit_reached";
     private static final String KEY_PRIMARY_ACTIVE="quota_primary_active";
     private static final String KEY_PRIMARY_USED="quota_primary_used";
     private static final String KEY_PRIMARY_RESET="quota_primary_reset";
@@ -60,6 +61,9 @@ final class Scheduler {
     private static final String KEY_RESET_EXPIRIES="reset_credit_expiries";
     private static final String KEY_RESET_LAST_CHECK="reset_credit_last_check";
     private static final String KEY_RESET_ERROR="reset_credit_error";
+    private static final String KEY_BANKED_ARMED="banked_reset_on_exhaustion";
+    private static final String KEY_BANKED_ARMED_ID="banked_reset_armed_credit_id";
+    private static final Object BANKED_RESET_LOCK=new Object();
 
     private static final String KEY_NEXT_KIND="next_event_kind";
     private static final String KEY_NEXT_AUTO_COUNT="next_event_auto_count";
@@ -81,7 +85,7 @@ final class Scheduler {
 
     static final class Snapshot {
         final String plan;
-        final boolean allowed;
+        final boolean allowed,limitReached;
         final boolean primaryActive;
         final boolean primaryConfirmed;
         final double primaryUsed;
@@ -96,6 +100,7 @@ final class Scheduler {
         Snapshot(SharedPreferences p){
             plan=p.getString(KEY_PLAN,"—");
             allowed=p.getBoolean(KEY_ALLOWED,true);
+            limitReached=p.getBoolean(KEY_LIMIT_REACHED,false);
             primaryActive=p.getBoolean(KEY_PRIMARY_ACTIVE,false);
             primaryConfirmed=p.getBoolean(KEY_PRIMARY_CONFIRMED,false);
             primaryUsed=Double.longBitsToDouble(p.getLong(KEY_PRIMARY_USED,Double.doubleToLongBits(0)));
@@ -217,9 +222,60 @@ final class Scheduler {
                 formatTime(System.currentTimeMillis())+" · "+source).apply();
     }
 
+    // Default policy: preserve remaining allowance until either window is exhausted.
     static boolean resetEligibleNow(Context c){
         Snapshot s=snapshot(c);
-        return !s.allowed || s.primaryUsed>=99.999 || s.secondaryUsed>=99.999;
+        return s.limitReached ||
+                (s.primaryActive && s.primaryUsed>=99.999) ||
+                (s.secondaryActive && s.secondaryUsed>=99.999);
+    }
+
+    static boolean isBankedResetArmed(Context c){
+        return prefs(c).getBoolean(KEY_BANKED_ARMED,false);
+    }
+
+    static void armBankedReset(Context c){
+        synchronized(BANKED_RESET_LOCK){
+            Snapshot s=snapshot(c);
+            if(s.resetAvailableCount<=0 || s.resetCreditId==null || s.resetCreditId.isEmpty()){
+                note(c,"無可用的 Banked Reset，無法待命");
+                return;
+            }
+            prefs(c).edit()
+                    .putBoolean(KEY_BANKED_ARMED,true)
+                    .putString(KEY_BANKED_ARMED_ID,s.resetCreditId)
+                    .commit();
+            note(c,"Banked Reset 已待命：5h 或週配額用盡後自動使用一次");
+            scheduleQuotaSampling(c);
+        }
+    }
+
+    static void cancelArmedBankedReset(Context c){
+        synchronized(BANKED_RESET_LOCK){
+            clearArmedBankedReset(c);
+            note(c,"已取消 Banked Reset 自動待命");
+        }
+    }
+
+    private static void clearArmedBankedReset(Context c){
+        prefs(c).edit().remove(KEY_BANKED_ARMED).remove(KEY_BANKED_ARMED_ID).commit();
+    }
+
+    private static boolean quotaExhausted(CodexClient.Quota q){
+        return q.limitReached ||
+                (q.primary!=null&&q.primary.usedPercent>=99.999) ||
+                (q.secondary!=null&&q.secondary.usedPercent>=99.999);
+    }
+
+    // Sampling runs independently of the normal 5-hour automatic-trigger mode.
+    // At most one saved reset is redeemed for each explicit opt-in.
+    private static boolean maybeConsumeArmedBankedReset(Context c,CodexClient.Quota q){
+        if(!isBankedResetArmed(c)||!quotaExhausted(q))return false;
+        synchronized(BANKED_RESET_LOCK){
+            if(!isBankedResetArmed(c))return false;
+            String id=prefs(c).getString(KEY_BANKED_ARMED_ID,"");
+            return consumeResetCreditInternal(c,false,id,true);
+        }
     }
 
     static int chainRemaining(Context c){return prefs(c).getInt(KEY_CHAIN_REMAINING,0);}
@@ -233,6 +289,7 @@ final class Scheduler {
             CodexClient.Quota q=cli.getQuota();
             storeQuota(c,q,false);
             refreshResetCredits(c,cli,logEvent);
+            if(maybeConsumeArmedBankedReset(c,q))q=cli.getQuota();
             UsageHistory.refreshGlobalResetStats(c,false);
             if(logEvent)record(c,quotaHistorySummary(q));
             scheduleQuotaSampling(c);
@@ -276,6 +333,26 @@ final class Scheduler {
             }
             e.apply();
             UsageHistory.recordSnapshot(c,snapshot(c));
+            // Cancel an armed one-shot only when a successful server refresh
+            // proves that its selected credit no longer exists.
+            if(isBankedResetArmed(c)){
+                String selected=p.getString(KEY_BANKED_ARMED_ID,"");
+                boolean stillAvailable=false;
+                for(CodexClient.ResetCredit item:credits.available){
+                    if(selected.equals(item.id)){stillAvailable=true;break;}
+                }
+                if(!stillAvailable){
+                    synchronized(BANKED_RESET_LOCK){
+                        if(isBankedResetArmed(c) &&
+                                selected.equals(p.getString(KEY_BANKED_ARMED_ID,""))){
+                            clearArmedBankedReset(c);
+                            record(c,"Banked Reset 已失效或到期，取消自動待命");
+                            notifyNtfy(c,"Codex Banked Reset 待命取消",
+                                    "預存重置已到期或不再可用");
+                        }
+                    }
+                }
+            }
         }catch(Exception e){
             p.edit()
                     .putInt(KEY_RESET_AVAILABLE,0)
@@ -288,44 +365,83 @@ final class Scheduler {
     }
 
     static void consumeResetCredit(Context c){
-        try{
-            CodexClient cli=new CodexClient(c);
+        consumeResetCreditInternal(c,false,null,false);
+    }
 
-            // Re-check live quota immediately before spending a reset credit.
-            CodexClient.Quota live=cli.getQuota();
-            storeQuota(c,live,false);
-            boolean exhausted=!live.allowed || live.limitReached ||
-                    (live.primary!=null&&live.primary.usedPercent>=99.999) ||
-                    (live.secondary!=null&&live.secondary.usedPercent>=99.999);
-            if(!exhausted){
-                record(c,"Reset 未執行：5 小時與週配額都尚未用盡");
+    static void consumeResetCreditNow(Context c){
+        consumeResetCreditInternal(c,true,null,false);
+    }
+
+    private static boolean consumeResetCreditInternal(Context c,boolean allowPartial,
+                                                       String requiredId,boolean automatic){
+        synchronized(BANKED_RESET_LOCK){
+            try{
+                CodexClient cli=new CodexClient(c);
+                // Always re-check server-side state immediately before spending a credit.
+                CodexClient.Quota live=cli.getQuota();
+                storeQuota(c,live,false);
+                boolean exhausted=quotaExhausted(live);
+                boolean used=exhausted ||
+                        (live.primary!=null&&live.primary.usedPercent>0.0001) ||
+                        (live.secondary!=null&&live.secondary.usedPercent>0.0001);
+                if(!(allowPartial?used:exhausted)){
+                    record(c,allowPartial?"Reset 未執行：沒有已使用的額度":
+                            "Reset 未執行：5 小時與週配額都尚未用盡");
+                    refreshResetCredits(c,cli,true);
+                    return false;
+                }
+
+                CodexClient.ResetCredits credits=cli.getResetCredits();
+                CodexClient.ResetCredit credit=null;
+                for(CodexClient.ResetCredit item:credits.available){
+                    if(requiredId==null || requiredId.equals(item.id)){
+                        credit=item;
+                        break;
+                    }
+                }
+                if(credit==null || credits.availableCount<=0){
+                    refreshResetCredits(c,cli,true);
+                    if(automatic){
+                        clearArmedBankedReset(c);
+                        record(c,"待命的 Banked Reset 已不可用，已取消待命");
+                        notifyNtfy(c,"Codex Banked Reset 待命取消","原本選定的 Reset 已不可用或到期");
+                    }else{
+                        record(c,"目前沒有可用的 Banked Reset");
+                    }
+                    return false;
+                }
+
+                CodexClient.ResetResult result=cli.consumeResetCredit(credit.id);
+                if(result.windowsReset<=0){
+                    refreshResetCredits(c,cli,true);
+                    record(c,"Reset 未套用：伺服器沒有刷新任何用量視窗");
+                    return false;
+                }
+
+                // A successful manual redemption also fulfills any armed request.
+                clearArmedBankedReset(c);
+                prefs(c).edit().putBoolean(KEY_PRIMARY_CONFIRMED,false).apply();
+                Thread.sleep(1_000L);
+
+                CodexClient.Quota fresh=cli.getQuota();
+                storeQuota(c,fresh,false);
                 refreshResetCredits(c,cli,true);
-                return;
+                record(c,(automatic?"用盡後自動 Reset 完成":"Reset 完成")+
+                        " · "+result.windowsReset+" 個視窗");
+                UsageHistory.addEvent(c,"banked_reset",automatic?
+                        "Banked Reset（用盡後自動使用）":"Banked Reset（由 Codex Tools 使用）",
+                        "Codex Tools");
+                notifyNtfy(c,automatic?"Codex Banked Reset 自動完成":"Codex Reset 完成",
+                        "已重置 "+result.windowsReset+" 個 usage window");
+
+                if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,fresh);
+                else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
+                return true;
+            }catch(Exception e){
+                record(c,(automatic?"自動 Reset":"Reset")+" 失敗: "+safe(e));
+                // Keep armed mode for a later sampling retry on transient failures.
+                return false;
             }
-
-            CodexClient.ResetCredits credits=cli.getResetCredits();
-            CodexClient.ResetCredit credit=credits.first();
-            if(credit==null||credits.availableCount<=0){
-                prefs(c).edit().putInt(KEY_RESET_AVAILABLE,0).remove(KEY_RESET_CREDIT_ID).apply();
-                record(c,"目前沒有可用的 reset");
-                return;
-            }
-
-            CodexClient.ResetResult result=cli.consumeResetCredit(credit.id);
-            prefs(c).edit().putBoolean(KEY_PRIMARY_CONFIRMED,false).apply();
-            Thread.sleep(1_000L);
-
-            CodexClient.Quota q=cli.getQuota();
-            storeQuota(c,q,false);
-            refreshResetCredits(c,cli,true);
-            record(c,"Reset 完成 · "+result.windowsReset+" 個視窗");
-            UsageHistory.addEvent(c,"banked_reset","Banked Reset（由 Codex Tools 使用）","Codex Tools");
-            notifyNtfy(c,"Codex Reset 完成","已重置 "+result.windowsReset+" 個 usage window");
-
-            if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
-            else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
-        }catch(Exception e){
-            record(c,"Reset 失敗: "+safe(e));
         }
     }
 
@@ -755,6 +871,14 @@ final class Scheduler {
         long previousCheck=p.getLong(KEY_LAST_CHECK,0);
         long previousReset=p.getLong(KEY_PRIMARY_RESET,0);
         boolean previousConfirmed=p.getBoolean(KEY_PRIMARY_CONFIRMED,false);
+        double previousWeeklyUsed=Double.longBitsToDouble(
+                p.getLong(KEY_SECONDARY_USED,Double.doubleToLongBits(0)));
+        long previousWeeklyReset=p.getLong(KEY_SECONDARY_RESET,0);
+        boolean naturalWeekly=previousWeeklyReset>0 &&
+                now>=previousWeeklyReset-15*60_000L &&
+                now<=previousWeeklyReset+60*60_000L;
+        boolean unexpectedWeeklyRefresh=q.secondary!=null &&
+                previousWeeklyUsed-q.secondary.usedPercent>2.0 && !naturalWeekly;
 
         boolean confirmed=false;
         long newReset=0;
@@ -776,9 +900,18 @@ final class Scheduler {
             }
         }
 
+        // A global reset can replace a confirmed 5h window with a zero-usage
+        // sliding placeholder having nearly the same timestamp. Do not preserve
+        // the old confirmed window or its 5h forecast line across that event.
+        if(unexpectedWeeklyRefresh && q.primary!=null &&
+                q.primary.usedPercent<=0.0001){
+            confirmed=false;
+        }
+
         SharedPreferences.Editor e=p.edit()
                 .putString(KEY_PLAN,q.plan)
                 .putBoolean(KEY_ALLOWED,q.allowed)
+                .putBoolean(KEY_LIMIT_REACHED,q.limitReached)
                 .putLong(KEY_LAST_CHECK,now)
                 .putBoolean(KEY_PRIMARY_CONFIRMED,confirmed);
 
@@ -828,6 +961,7 @@ final class Scheduler {
             CodexClient.Quota q=cli.getQuota();
             storeQuota(c,q,false);
             refreshResetCredits(c,cli,false);
+            if(maybeConsumeArmedBankedReset(c,q))q=cli.getQuota();
             UsageHistory.refreshGlobalResetStats(c,false);
             if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
             else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
