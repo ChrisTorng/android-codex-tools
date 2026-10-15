@@ -564,13 +564,14 @@ public class MainActivity extends Activity {
         boolean resetEligible=Scheduler.resetEligibleNow(this);
         boolean hasReset=q.resetAvailableCount>0 && q.resetCreditId!=null && !q.resetCreditId.isEmpty();
         resetCreditsRow.setVisibility(View.VISIBLE);
-        String resetLabel="Banked Reset ×"+q.resetAvailableCount;
+        boolean armed=Scheduler.isBankedResetArmed(this);
+        String resetLabel="Banked Reset ×"+q.resetAvailableCount+(armed?" · 待命":"");
         resetCreditsTitle.setText(resetLabel);
         resetCreditsButton.setText(resetLabel);
-        boolean canRedeem=resetEligible&&hasReset;
-        resetCreditsTitle.setVisibility(canRedeem?View.GONE:View.VISIBLE);
-        resetCreditsButton.setVisibility(canRedeem?View.VISIBLE:View.GONE);
-        resetCreditsButton.setEnabled(canRedeem);
+        // Can arm when unused, use now when partially used, or cancel when armed.
+        resetCreditsTitle.setVisibility(hasReset||armed?View.GONE:View.VISIBLE);
+        resetCreditsButton.setVisibility(hasReset||armed?View.VISIBLE:View.GONE);
+        resetCreditsButton.setEnabled(hasReset||armed);
 
         StringBuilder expiryInfo=new StringBuilder();
         if(q.resetExpiries!=null&&!q.resetExpiries.isEmpty()){
@@ -585,8 +586,10 @@ public class MainActivity extends Activity {
         }else if(q.resetExpires!=null&&!q.resetExpires.isEmpty()){
             expiryInfo.append(formatIsoMinute(q.resetExpires));
         }
-        resetCreditsText.setText(expiryInfo.length()==0?"":"到期 "+expiryInfo);
-        resetCreditsText.setVisibility(expiryInfo.length()==0?View.GONE:View.VISIBLE);
+        String info=expiryInfo.length()==0?"":"到期 "+expiryInfo;
+        if(armed)info="用盡後自動重置"+(info.isEmpty()?"":" · "+info);
+        resetCreditsText.setText(info);
+        resetCreditsText.setVisibility(info.isEmpty()?View.GONE:View.VISIBLE);
 
         UsageHistory.GlobalResetStats gs=UsageHistory.loadGlobalResetStats(this);
         if(globalResetText!=null){
@@ -1070,31 +1073,73 @@ public class MainActivity extends Activity {
 
     private void confirmReset(){
         Scheduler.Snapshot q=Scheduler.snapshot(this);
-        if(!Scheduler.resetEligibleNow(this)){
-            toast("額度尚未使用，無需套用 Banked Reset");
+        boolean armed=Scheduler.isBankedResetArmed(this);
+        boolean hasReset=q.resetAvailableCount>0 &&
+                q.resetCreditId!=null && !q.resetCreditId.isEmpty();
+        if(armed){
+            new AlertDialog.Builder(this)
+                    .setTitle("Banked Reset 已待命")
+                    .setMessage("當 5h 或週配額任一用盡，App 會在背景採樣偵測後自動使用一次預存重置。")
+                    .setPositiveButton("立即重置",(d,w)->confirmResetNow(true))
+                    .setNeutralButton("取消待命",(d,w)->{
+                        Scheduler.cancelArmedBankedReset(this);
+                        refreshAll();
+                    })
+                    .setNegativeButton("返回",null).show();
             return;
         }
+        if(!hasReset){
+            toast("目前沒有可用的 Banked Reset");
+            return;
+        }
+        if(Scheduler.resetEligibleNow(this)){
+            confirmResetNow(false);
+            return;
+        }
+        // Do not spend a saved reset simply because a window has partial usage.
+        new AlertDialog.Builder(this)
+                .setTitle("Banked Reset · 選擇使用時機")
+                .setItems(new String[]{
+                        "用盡後自動重置（一次）",
+                        "現在立即重置"
+                },(d,which)->{
+                    if(which==0){
+                        Scheduler.armBankedReset(this);
+                        refreshAll();
+                        // Recheck server state; cached usage may have changed.
+                        runCheck();
+                    }else{
+                        confirmResetNow(true);
+                    }
+                })
+                .setNegativeButton("取消",null)
+                .show();
+    }
+
+    private void confirmResetNow(boolean allowPartial){
+        Scheduler.Snapshot q=Scheduler.snapshot(this);
         if(q.resetAvailableCount<=0||q.resetCreditId==null||q.resetCreditId.isEmpty()){
-            toast("目前沒有可用的 banked reset");
+            toast("目前沒有可用的 Banked Reset");
             return;
         }
         String title=q.resetTitle==null||q.resetTitle.isEmpty()?"Full reset":q.resetTitle;
         String detail=q.resetDescription==null?"":q.resetDescription;
-        String expiry=q.resetExpires==null||q.resetExpires.isEmpty()?"":"\n到期："+formatIsoTime(q.resetExpires);
+        String expiry=q.resetExpires==null||q.resetExpires.isEmpty()?"":"\\n到期："+formatIsoTime(q.resetExpires);
         new AlertDialog.Builder(this)
-                .setTitle("使用 "+title+"？")
-                .setMessage("若伺服器成功刷新至少一個已使用的配額視窗，才會消耗 1 次 Banked Reset。完成後 App 會重新查詢實際配額，不會自動送 Codex request。"+
-                        (detail.isEmpty()?"":"\n\n"+detail)+expiry)
+                .setTitle("立即使用 "+title+"？")
+                .setMessage("將立即刷新已使用的 5h／週配額，並改變週配額重置日期；可能浪費尚未用完的額度。"+
+                        "只有成功刷新至少一個視窗，才會消耗 1 次 Banked Reset。"+
+                        "若兩個視窗都尚未使用，會略過本次操作。"+
+                        "\\n本操作不會主動送出 Codex request。"+
+                        (detail.isEmpty()?"":"\\n\\n"+detail)+expiry)
                 .setNegativeButton("取消",null)
-                .setPositiveButton("使用 Reset",(d,w)->{
+                .setPositiveButton("立即重置",(d,w)->{
                     resetCreditsButton.setEnabled(false);
-                    toast("正在 Reset…");
+                    toast("正在重置…");
                     new Thread(()->{
-                        Scheduler.consumeResetCredit(getApplicationContext());
-                        runOnUiThread(()->{
-                            resetCreditsButton.setEnabled(true);
-                            refreshAll();
-                        });
+                        if(allowPartial)Scheduler.consumeResetCreditNow(getApplicationContext());
+                        else Scheduler.consumeResetCredit(getApplicationContext());
+                        runOnUiThread(this::refreshAll);
                     },"codex-reset").start();
                 }).show();
     }
