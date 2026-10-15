@@ -219,7 +219,11 @@ final class Scheduler {
 
     static boolean resetEligibleNow(Context c){
         Snapshot s=snapshot(c);
-        return !s.allowed || s.primaryUsed>=99.999 || s.secondaryUsed>=99.999;
+        // A saved reset can refresh an already-used window before exhaustion.
+        // Full 100% remaining on both windows has nothing to refresh.
+        return !s.allowed ||
+                (s.primaryActive && s.primaryUsed>0.0001) ||
+                (s.secondaryActive && s.secondaryUsed>0.0001);
     }
 
     static int chainRemaining(Context c){return prefs(c).getInt(KEY_CHAIN_REMAINING,0);}
@@ -294,11 +298,11 @@ final class Scheduler {
             // Re-check live quota immediately before spending a reset credit.
             CodexClient.Quota live=cli.getQuota();
             storeQuota(c,live,false);
-            boolean exhausted=!live.allowed || live.limitReached ||
-                    (live.primary!=null&&live.primary.usedPercent>=99.999) ||
-                    (live.secondary!=null&&live.secondary.usedPercent>=99.999);
-            if(!exhausted){
-                record(c,"Reset 未執行：5 小時與週配額都尚未用盡");
+            boolean eligible=!live.allowed || live.limitReached ||
+                    (live.primary!=null&&live.primary.usedPercent>0.0001) ||
+                    (live.secondary!=null&&live.secondary.usedPercent>0.0001);
+            if(!eligible){
+                record(c,"Reset 未執行：5 小時與週配額皆尚未使用");
                 refreshResetCredits(c,cli,true);
                 return;
             }
@@ -312,6 +316,11 @@ final class Scheduler {
             }
 
             CodexClient.ResetResult result=cli.consumeResetCredit(credit.id);
+            if(result.windowsReset<=0){
+                refreshResetCredits(c,cli,true);
+                record(c,"Reset 未套用：伺服器沒有刷新任何用量視窗");
+                return;
+            }
             prefs(c).edit().putBoolean(KEY_PRIMARY_CONFIRMED,false).apply();
             Thread.sleep(1_000L);
 
