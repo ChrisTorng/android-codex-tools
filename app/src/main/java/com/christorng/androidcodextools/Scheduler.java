@@ -871,6 +871,14 @@ final class Scheduler {
         long previousCheck=p.getLong(KEY_LAST_CHECK,0);
         long previousReset=p.getLong(KEY_PRIMARY_RESET,0);
         boolean previousConfirmed=p.getBoolean(KEY_PRIMARY_CONFIRMED,false);
+        double previousWeeklyUsed=Double.longBitsToDouble(
+                p.getLong(KEY_SECONDARY_USED,Double.doubleToLongBits(0)));
+        long previousWeeklyReset=p.getLong(KEY_SECONDARY_RESET,0);
+        boolean naturalWeekly=previousWeeklyReset>0 &&
+                now>=previousWeeklyReset-15*60_000L &&
+                now<=previousWeeklyReset+60*60_000L;
+        boolean unexpectedWeeklyRefresh=q.secondary!=null &&
+                previousWeeklyUsed-q.secondary.usedPercent>2.0 && !naturalWeekly;
 
         boolean confirmed=false;
         long newReset=0;
@@ -890,6 +898,14 @@ final class Scheduler {
                     confirmed=true;
                 }
             }
+        }
+
+        // A global reset can replace a confirmed 5h window with a zero-usage
+        // sliding placeholder having nearly the same timestamp. Do not preserve
+        // the old confirmed window or its 5h forecast line across that event.
+        if(unexpectedWeeklyRefresh && q.primary!=null &&
+                q.primary.usedPercent<=0.0001){
+            confirmed=false;
         }
 
         SharedPreferences.Editor e=p.edit()
