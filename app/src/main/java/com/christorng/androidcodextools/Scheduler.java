@@ -42,6 +42,7 @@ final class Scheduler {
 
     private static final String KEY_PLAN="quota_plan";
     private static final String KEY_ALLOWED="quota_allowed";
+    private static final String KEY_LIMIT_REACHED="quota_limit_reached";
     private static final String KEY_PRIMARY_ACTIVE="quota_primary_active";
     private static final String KEY_PRIMARY_USED="quota_primary_used";
     private static final String KEY_PRIMARY_RESET="quota_primary_reset";
@@ -84,7 +85,7 @@ final class Scheduler {
 
     static final class Snapshot {
         final String plan;
-        final boolean allowed;
+        final boolean allowed,limitReached;
         final boolean primaryActive;
         final boolean primaryConfirmed;
         final double primaryUsed;
@@ -99,6 +100,7 @@ final class Scheduler {
         Snapshot(SharedPreferences p){
             plan=p.getString(KEY_PLAN,"—");
             allowed=p.getBoolean(KEY_ALLOWED,true);
+            limitReached=p.getBoolean(KEY_LIMIT_REACHED,false);
             primaryActive=p.getBoolean(KEY_PRIMARY_ACTIVE,false);
             primaryConfirmed=p.getBoolean(KEY_PRIMARY_CONFIRMED,false);
             primaryUsed=Double.longBitsToDouble(p.getLong(KEY_PRIMARY_USED,Double.doubleToLongBits(0)));
@@ -223,7 +225,7 @@ final class Scheduler {
     // Default policy: preserve remaining allowance until either window is exhausted.
     static boolean resetEligibleNow(Context c){
         Snapshot s=snapshot(c);
-        return !s.allowed ||
+        return s.limitReached ||
                 (s.primaryActive && s.primaryUsed>=99.999) ||
                 (s.secondaryActive && s.secondaryUsed>=99.999);
     }
@@ -260,7 +262,7 @@ final class Scheduler {
     }
 
     private static boolean quotaExhausted(CodexClient.Quota q){
-        return !q.allowed || q.limitReached ||
+        return q.limitReached ||
                 (q.primary!=null&&q.primary.usedPercent>=99.999) ||
                 (q.secondary!=null&&q.secondary.usedPercent>=99.999);
     }
@@ -873,6 +875,7 @@ final class Scheduler {
         SharedPreferences.Editor e=p.edit()
                 .putString(KEY_PLAN,q.plan)
                 .putBoolean(KEY_ALLOWED,q.allowed)
+                .putBoolean(KEY_LIMIT_REACHED,q.limitReached)
                 .putLong(KEY_LAST_CHECK,now)
                 .putBoolean(KEY_PRIMARY_CONFIRMED,confirmed);
 
