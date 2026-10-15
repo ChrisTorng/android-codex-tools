@@ -286,6 +286,12 @@ final class UsageHistory {
 
                 String state=o.optString("announcement_state","");
                 if(!"announced".equalsIgnoreCase(state))continue;
+                // The public feed can mark advance announcements as "confirmed"
+                // while actual propagation remains pending. Match only verified
+                // high-confidence archive events, not promises of future resets.
+                if(!o.optBoolean("confirmed",false) ||
+                        !"high".equalsIgnoreCase(o.optString("confidence","")) ||
+                        !"archive".equalsIgnoreCase(o.optString("source","")))continue;
 
                 String ts=o.optString("effective_at","");
                 if(ts.isEmpty())ts=o.optString("announced_at","");
