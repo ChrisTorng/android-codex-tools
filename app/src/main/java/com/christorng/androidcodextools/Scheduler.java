@@ -333,6 +333,26 @@ final class Scheduler {
             }
             e.apply();
             UsageHistory.recordSnapshot(c,snapshot(c));
+            // Cancel an armed one-shot only when a successful server refresh
+            // proves that its selected credit no longer exists.
+            if(isBankedResetArmed(c)){
+                String selected=p.getString(KEY_BANKED_ARMED_ID,"");
+                boolean stillAvailable=false;
+                for(CodexClient.ResetCredit item:credits.available){
+                    if(selected.equals(item.id)){stillAvailable=true;break;}
+                }
+                if(!stillAvailable){
+                    synchronized(BANKED_RESET_LOCK){
+                        if(isBankedResetArmed(c) &&
+                                selected.equals(p.getString(KEY_BANKED_ARMED_ID,""))){
+                            clearArmedBankedReset(c);
+                            record(c,"Banked Reset 已失效或到期，取消自動待命");
+                            notifyNtfy(c,"Codex Banked Reset 待命取消",
+                                    "預存重置已到期或不再可用");
+                        }
+                    }
+                }
+            }
         }catch(Exception e){
             p.edit()
                     .putInt(KEY_RESET_AVAILABLE,0)
