@@ -17,6 +17,8 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -27,7 +29,10 @@ import java.util.Locale;
 final class Scheduler {
     static final String PREFS="app";
     static final String KEY_NTFY="ntfy_url";
-    static final String DEFAULT_NTFY="https://ntfy.sh/codex-8b7a238e0815ab41ffe56082eb6a7b21";
+    // Hash only for one-time migration of the previous shared default topic.
+    // Do not ship the old shared URL in the application binary.
+    private static final String LEGACY_NTFY_SHA256=
+            "2a757a24eedaa8a204429ebff77b63b19ac855ea1e7c20d5255ad63d58fb993e";
     private static final String KEY_NTFY_LAST="ntfy_last_status";
     static final String KEY_LAST="last_status";
     private static final String KEY_HISTORY="event_history_v1";
@@ -202,15 +207,48 @@ final class Scheduler {
     static long next(Context c){return prefs(c).getLong(KEY_NEXT,0);}
     static String nextReason(Context c){return prefs(c).getString(KEY_NEXT_REASON,"");}
     static String ntfyUrl(Context c){
-        String value=prefs(c).getString(KEY_NTFY,DEFAULT_NTFY);
-        if(value==null||value.trim().isEmpty())return DEFAULT_NTFY;
-        return value.trim();
+        migrateSharedNtfy(c);
+        String value=prefs(c).getString(KEY_NTFY,"");
+        return value==null?"":value.trim();
     }
+
+    private static void migrateSharedNtfy(Context c){
+        SharedPreferences p=prefs(c);
+        String value=p.getString(KEY_NTFY,"");
+        if(value==null||value.isEmpty())return;
+        try{
+            byte[] bytes=MessageDigest.getInstance("SHA-256").digest(
+                    value.trim().getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex=new StringBuilder();
+            for(byte b:bytes)hex.append(String.format(Locale.ROOT,"%02x",b&0xff));
+            if(LEGACY_NTFY_SHA256.equals(hex.toString())){
+                p.edit().remove(KEY_NTFY).remove(KEY_NTFY_LAST).apply();
+                note(c,"舊版共用 ntfy 網址已停用；需要時請自行建立新 topic");
+            }
+        }catch(Exception e){
+            note(c,"ntfy 舊設定檢查失敗: "+safe(e));
+        }
+    }
+
+    static String newNtfyUrl(){
+        byte[] id=new byte[24];
+        new SecureRandom().nextBytes(id);
+        StringBuilder url=new StringBuilder("https://ntfy.sh/codex-");
+        for(byte b:id)url.append(String.format(Locale.ROOT,"%02x",b&0xff));
+        return url.toString();
+    }
+
     static String ntfyLastStatus(Context c){
+        if(ntfyUrl(c).isEmpty())return "未設定";
         return prefs(c).getString(KEY_NTFY_LAST,"尚未測試");
     }
+
     static void testNtfy(Context c){
-        notifyNtfy(c,"Codex Tools 測試","ntfy 通知測試成功");
+        if(ntfyUrl(c).isEmpty()){
+            prefs(c).edit().putString(KEY_NTFY_LAST,"未設定網址").apply();
+            return;
+        }
+        sendNtfyOnly(c,"Codex Tools 測試","ntfy 通知測試成功");
     }
     static String lastAlarmReceived(Context c){return prefs(c).getString(KEY_LAST_ALARM_RECEIVED,"—");}
     static String lastBackupReceived(Context c){return prefs(c).getString(KEY_LAST_BACKUP_RECEIVED,"—");}
@@ -1000,7 +1038,14 @@ final class Scheduler {
     }
 
     private static void notifyNtfy(Context c,String title,String body){
+        // On-device notifications are primary; ntfy is an optional secondary channel.
+        AndroidNotifications.post(c,title,body);
+        if(!ntfyUrl(c).isEmpty())sendNtfyOnly(c,title,body);
+    }
+
+    private static void sendNtfyOnly(Context c,String title,String body){
         String u=ntfyUrl(c);
+        if(u.isEmpty())return;
         try{
             new CodexClient(c).sendNtfy(u,title,body);
             prefs(c).edit().putString(KEY_NTFY_LAST,
