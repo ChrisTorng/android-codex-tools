@@ -16,7 +16,7 @@ jobs:
       - name: Verify cached signing key exists
         run: |
           if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            echo "Signing cache is missing; a normal APK build will recreate it."
-            exit 0
+            echo "::error::Signing cache is missing; builds must not generate a different keystore."
+            exit 1
           fi
           keytool -list -v             -keystore "$HOME/.android/debug.keystore"             -storepass android             -alias androiddebugkey | grep -E "SHA256:|SHA-256:" || true
