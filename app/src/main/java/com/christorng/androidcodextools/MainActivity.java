@@ -3,6 +3,8 @@ package com.christorng.androidcodextools;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.TimePickerDialog;
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.content.Intent;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -79,9 +81,12 @@ public class MainActivity extends Activity {
     private Spinner modeSpinner;
     private TextView nextAlarmText,previewText,weeklySummary,todaySummary,tomorrowSummary;
 
-    private TextView settingsAccount,exactAlarmText,versionText;
+    private static final int REQUEST_NOTIFICATION_PERMISSION=3107;
+    private static final String KEY_NOTIFICATION_PERMISSION_ASKED="notification_permission_asked";
+    private TextView settingsAccount,exactAlarmText,versionText,nativeNotifyState;
+    private Switch nativeNotifySwitch;
     private EditText ntfyEdit;
-    private Button ntfySaveButton;
+    private Button ntfySaveButton,ntfyTestButton,ntfyCopyButton;
     private String ntfySavedValue="";
     private final Handler foregroundHandler=new Handler(Looper.getMainLooper());
     private volatile boolean quotaRefreshRunning=false;
@@ -102,7 +107,39 @@ public class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(darkMode?0:
                 (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));
         buildUi();
+        AndroidNotifications.ensureChannel(this);
         refreshAll();
+        requestNativeNotificationPermission(true);
+    }
+
+    private void requestNativeNotificationPermission(boolean firstLaunch){
+        if(Build.VERSION.SDK_INT<33||!AndroidNotifications.enabled(this)||
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                        ==PackageManager.PERMISSION_GRANTED)return;
+        if(firstLaunch && Scheduler.prefs(this).getBoolean(
+                KEY_NOTIFICATION_PERMISSION_ASKED,false))return;
+        Scheduler.prefs(this).edit().putBoolean(KEY_NOTIFICATION_PERMISSION_ASKED,true).apply();
+        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                REQUEST_NOTIFICATION_PERMISSION);
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,
+                                                      int[] grantResults){
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults);
+        if(requestCode==REQUEST_NOTIFICATION_PERMISSION){
+            if(nativeNotifyState!=null)updateNativeNotificationState();
+            if(!AndroidNotifications.permitted(this)){
+                toast("未取得系統通知權限；可到 Android App 設定開啟");
+            }
+        }
+    }
+
+    private void updateNativeNotificationState(){
+        if(nativeNotifyState==null)return;
+        nativeNotifyState.setText(!AndroidNotifications.enabled(this)
+                ?"App 通知已關閉"
+                :AndroidNotifications.permitted(this)
+                    ?"系統通知已就緒":"尚未取得系統通知權限，請到 App 通知設定允許");
     }
 
     @Override protected void onResume(){
@@ -409,22 +446,65 @@ public class MainActivity extends Activity {
             @Override public void onNothingSelected(android.widget.AdapterView<?> p){}
         });
 
-        TextView ntfyLabel=sectionTitle("ntfy");
+        TextView androidNotifyLabel=sectionTitle("Android 系統通知");
+        androidNotifyLabel.setPadding(0,dp(8),0,0);
+        root.addView(androidNotifyLabel);
+
+        LinearLayout notificationRow=new LinearLayout(this);
+        notificationRow.setGravity(Gravity.CENTER_VERTICAL);
+        nativeNotifySwitch=new Switch(this);
+        nativeNotifySwitch.setText("開啟系統通知");
+        nativeNotifySwitch.setTextSize(14);
+        nativeNotifySwitch.setTextColor(textPrimary());
+        nativeNotifySwitch.setChecked(AndroidNotifications.enabled(this));
+        notificationRow.addView(nativeNotifySwitch,new LinearLayout.LayoutParams(0,dp(46),1));
+        Button testNativeNotify=smallButton("測試");
+        notificationRow.addView(testNativeNotify,new LinearLayout.LayoutParams(dp(78),dp(42)));
+        root.addView(notificationRow,new LinearLayout.LayoutParams(-1,dp(46)));
+
+        nativeNotifyState=bodyText("");
+        nativeNotifyState.setTextSize(11);
+        nativeNotifyState.setPadding(dp(4),0,0,dp(4));
+        root.addView(nativeNotifyState,new LinearLayout.LayoutParams(-1,-2));
+        updateNativeNotificationState();
+
+        nativeNotifySwitch.setOnCheckedChangeListener((button,enabled)->{
+            AndroidNotifications.setEnabled(this,enabled);
+            if(enabled)requestNativeNotificationPermission(false);
+            updateNativeNotificationState();
+        });
+        testNativeNotify.setOnClickListener(v->{
+            if(!AndroidNotifications.enabled(this)){
+                toast("請先開啟系統通知");
+                return;
+            }
+            if(!AndroidNotifications.permitted(this)){
+                requestNativeNotificationPermission(false);
+                toast("請先允許系統通知，再按測試");
+                return;
+            }
+            AndroidNotifications.post(this,"Codex Tools 測試","Android 系統通知已啟用");
+            toast("已送出系統通知");
+        });
+
+        TextView ntfyLabel=sectionTitle("ntfy（選用，預設關閉）");
         ntfyLabel.setPadding(0,dp(8),0,0);
         root.addView(ntfyLabel);
-
         ntfyEdit=new EditText(this);
         ntfyEdit.setSingleLine(true);
-        ntfyEdit.setTextSize(14);
+        ntfyEdit.setTextSize(12);
+        ntfyEdit.setHint("未設定，按「建立」產生隨機專屬網址");
         ntfyEdit.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
-        root.addView(ntfyEdit,new LinearLayout.LayoutParams(-1,dp(50)));
+        root.addView(ntfyEdit,new LinearLayout.LayoutParams(-1,dp(48)));
 
         LinearLayout ntfyActions=new LinearLayout(this);
-        Button testNtfy=smallButton("測試通知");
-        Button copyNtfy=smallButton("複製");
+        Button generateNtfy=smallButton("建立");
+        ntfyTestButton=smallButton("測試");
+        ntfyCopyButton=smallButton("複製");
         ntfySaveButton=smallButton("儲存");
-        ntfyActions.addView(testNtfy,new LinearLayout.LayoutParams(0,dp(42),1));
-        ntfyActions.addView(copyNtfy,new LinearLayout.LayoutParams(0,dp(42),1));
+        ntfyActions.addView(generateNtfy,new LinearLayout.LayoutParams(0,dp(42),1));
+        ntfyActions.addView(ntfyTestButton,new LinearLayout.LayoutParams(0,dp(42),1));
+        ntfyActions.addView(ntfyCopyButton,new LinearLayout.LayoutParams(0,dp(42),1));
         ntfyActions.addView(ntfySaveButton,new LinearLayout.LayoutParams(0,dp(42),1));
         root.addView(ntfyActions,new LinearLayout.LayoutParams(-1,dp(44)));
 
@@ -432,8 +512,33 @@ public class MainActivity extends Activity {
         ntfyStatus.setText("最近發送："+Scheduler.ntfyLastStatus(this));
         root.addView(ntfyStatus,new LinearLayout.LayoutParams(-1,dp(34)));
 
-        testNtfy.setOnClickListener(v->{
-            toast("正在送測試通知…");
+        generateNtfy.setOnClickListener(v->{
+            Runnable create=()->{
+                String url=Scheduler.newNtfyUrl();
+                Scheduler.prefs(this).edit()
+                        .putString(Scheduler.KEY_NTFY,url)
+                        .remove("ntfy_last_status").apply();
+                ntfySavedValue=url;
+                ntfyEdit.clearFocus();
+                ntfyEdit.setText(url);
+                ntfySaveButton.setEnabled(false);
+                ntfyTestButton.setEnabled(true);
+                ntfyCopyButton.setEnabled(true);
+                ntfyStatus.setText("最近發送：尚未測試");
+                toast("已建立並儲存專屬 ntfy topic");
+            };
+            if(!Scheduler.ntfyUrl(this).isEmpty()){
+                new AlertDialog.Builder(this)
+                        .setTitle("更換 ntfy topic？")
+                        .setMessage("舊 topic 的訂閱端將不再收到通知。請將新網址重新加入 ntfy 訂閱。")
+                        .setNegativeButton("取消",null)
+                        .setPositiveButton("建立新的",(d,w)->create.run()).show();
+            }else create.run();
+        });
+
+        ntfyTestButton.setOnClickListener(v->{
+            if(Scheduler.ntfyUrl(this).isEmpty()){toast("請先建立或儲存 ntfy 網址");return;}
+            toast("正在送 ntfy 測試通知…");
             new Thread(()->{
                 Scheduler.testNtfy(getApplicationContext());
                 runOnUiThread(()->{
@@ -443,17 +548,23 @@ public class MainActivity extends Activity {
             },"ntfy-test").start();
         });
 
-        copyNtfy.setOnClickListener(v->{
+        ntfyCopyButton.setOnClickListener(v->{
             String value=ntfyEdit.getText().toString().trim();
+            if(value.isEmpty()){toast("尚未設定 ntfy 網址");return;}
             ClipboardManager cm=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("ntfy URL",value));
             toast("已複製 ntfy URL");
         });
         ntfySaveButton.setOnClickListener(v->{
             ntfySavedValue=ntfyEdit.getText().toString().trim();
-            Scheduler.prefs(this).edit().putString(Scheduler.KEY_NTFY,ntfySavedValue).apply();
+            Scheduler.prefs(this).edit()
+                    .putString(Scheduler.KEY_NTFY,ntfySavedValue)
+                    .remove("ntfy_last_status").apply();
             ntfySaveButton.setEnabled(false);
-            toast("已儲存");
+            ntfyTestButton.setEnabled(!ntfySavedValue.isEmpty());
+            ntfyCopyButton.setEnabled(!ntfySavedValue.isEmpty());
+            ntfyStatus.setText("最近發送："+Scheduler.ntfyLastStatus(this));
+            toast(ntfySavedValue.isEmpty()?"已關閉 ntfy 通知":"ntfy 網址已儲存");
         });
         ntfyEdit.addTextChangedListener(new TextWatcher(){
             @Override public void beforeTextChanged(CharSequence s,int start,int count,int after){}
@@ -461,6 +572,7 @@ public class MainActivity extends Activity {
                 if(ntfySaveButton!=null){
                     ntfySaveButton.setEnabled(!s.toString().trim().equals(ntfySavedValue));
                 }
+                if(ntfyCopyButton!=null)ntfyCopyButton.setEnabled(!s.toString().trim().isEmpty());
             }
             @Override public void afterTextChanged(Editable e){}
         });
@@ -718,10 +830,13 @@ public class MainActivity extends Activity {
         exactAlarmText.setText((Scheduler.canExact(this)?"Exact Alarm 已允許":"Exact Alarm 尚未允許")+
                 " · 電池白名單："+(ignoringDoze?"是":"否")+
                 " · 採樣目標 "+Scheduler.samplingMinutes(this)+" 分");
+        updateNativeNotificationState();
         if(ntfyEdit!=null&&!ntfyEdit.hasFocus()){
             ntfySavedValue=Scheduler.ntfyUrl(this);
             ntfyEdit.setText(ntfySavedValue);
             if(ntfySaveButton!=null)ntfySaveButton.setEnabled(false);
+            if(ntfyTestButton!=null)ntfyTestButton.setEnabled(!ntfySavedValue.isEmpty());
+            if(ntfyCopyButton!=null)ntfyCopyButton.setEnabled(!ntfySavedValue.isEmpty());
         }
         try{
             PackageInfo p=getPackageManager().getPackageInfo(getPackageName(),0);
