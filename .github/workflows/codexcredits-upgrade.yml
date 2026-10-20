@@ -1,4 +1,4 @@
-# Rebuild after verified ARM64 migration/bridge fix 10a80ab6b749a755d5bda5b45e0dfa9dfe0eb0a5
+# Release build uses original cached signing key, never Tauri-generated debug key.
 name: CodexCredits Android in-place upgrade APK
 on:
   push:
@@ -69,12 +69,12 @@ jobs:
           npm run tauri -- android init --ci --skip-targets-install --config src-tauri/tauri.android.conf.json
       - name: Add legacy Android background implementation
         working-directory: codexcredits
-        run: python3 mobile/android/prepare.py --legacy ../legacy
-      - name: Compile signed ARM64 APK
+        run: python3 mobile/android/prepare.py --legacy ../legacy --release-keystore "$HOME/.android/debug.keystore"
+      - name: Compile optimized signed ARM64 Release APK
         working-directory: codexcredits
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
-          npm run tauri -- android build --debug --apk --target aarch64 --config src-tauri/tauri.android.conf.json
+          npm run tauri -- android build --apk --target aarch64 --config src-tauri/tauri.android.conf.json
       - name: Validate APK package/signature and stage direct APK
         run: |
           set -euo pipefail
