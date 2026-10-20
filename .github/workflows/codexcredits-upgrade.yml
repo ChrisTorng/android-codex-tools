@@ -1,3 +1,4 @@
+# Gradle Kotlin signing import fix validated in prepare.py, source 88e6325589dfd1ef54ae312079ae7f5ad9de3e46.
 # Release build uses original cached signing key, never Tauri-generated debug key.
 name: CodexCredits Android in-place upgrade APK
 on:
