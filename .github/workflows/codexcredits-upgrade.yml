@@ -1,3 +1,4 @@
+# Rebuild after verified ARM64 migration/bridge fix 10a80ab6b749a755d5bda5b45e0dfa9dfe0eb0a5
 name: CodexCredits Android in-place upgrade APK
 on:
   push:
