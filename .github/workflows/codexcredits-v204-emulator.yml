@@ -1,4 +1,4 @@
-name: CodexCredits v2.0.4 JNI-preserved release emulator smoke
+name: CodexCredits v2.0.4 RELEASE WebView startup verification
 on:
   workflow_dispatch:
   push:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ChrisTorng/CodexCredits
-          ref: 8c37915bffeaa5c47da589f91a11c6600c8335ef
+          ref: 5ba6c81849445da74584301b02d8852634870470
           path: codexcredits
       - uses: actions/setup-node@v4
         with:
@@ -94,13 +94,15 @@ jobs:
           disk-size: 4G
           ram-size: 2048M
           disable-animations: true
-          script: bash codexcredits/.github/scripts/android-emulator-smoke.sh
+          script: bash codexcredits/.github/scripts/android-release-emulator-smoke.sh
       - name: Upload startup crash evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-emulator-v204-startup-log
           path: |
-            codexcredits/android-emulator-launch.log
-            codexcredits/android-emulator-crash.log
+            codexcredits/android-emulator-release-launch.log
+            codexcredits/android-emulator-release-crash.log
+            codexcredits/android-emulator-release-screen.png
+            codexcredits/android-emulator-release-ui.xml
           if-no-files-found: ignore
