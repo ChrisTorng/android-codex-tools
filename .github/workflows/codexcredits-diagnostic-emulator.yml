@@ -36,6 +36,13 @@ jobs:
           SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      # Recommended by ReactiveCircus/android-emulator-runner for Ubuntu:
+      # enable /dev/kvm before launching the x86_64 AVD.
+      - name: Enable KVM hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - name: Prepare PNG icons
         working-directory: codexcredits
         run: |
@@ -71,6 +78,7 @@ jobs:
           api-level: 35
           target: default
           arch: x86_64
+          disable-linux-hw-accel: false
           profile: pixel_6
           disk-size: 4G
           ram-size: 2048M
