@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ChrisTorng/CodexCredits
-          ref: dc9e755f4619b1e47907c79717a41af003dce2cf
+          ref: 8808c99c7d2acdda34f26f4e90f49d6b247cdb05
           path: codexcredits
       - uses: actions/setup-node@v4
         with:
