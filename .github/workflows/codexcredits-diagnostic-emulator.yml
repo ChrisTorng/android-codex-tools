@@ -1,4 +1,4 @@
-name: CodexCredits diagnostic emulator migration smoke
+name: CodexCredits v2.0.2 Rust entry emulator smoke
 on:
   workflow_dispatch:
   push:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ChrisTorng/CodexCredits
-          ref: be6ad2b7f057f2e4b2581093a6c0cbe14786cebc
+          ref: ed795983ffc27a4915842522b6565899e751a777
           path: codexcredits
       - uses: actions/setup-node@v4
         with:
@@ -50,6 +50,9 @@ jobs:
           PY
       - run: npm install
         working-directory: codexcredits
+      - name: Validate Rust mobile entry point
+        working-directory: codexcredits
+        run: python3 mobile/android/check_entrypoint.py
       - name: Initialize and prepare Android app
         working-directory: codexcredits
         run: |
