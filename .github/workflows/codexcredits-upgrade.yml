@@ -1,4 +1,4 @@
-# Gradle Kotlin signing import fix validated in prepare.py, source 88e6325589dfd1ef54ae312079ae7f5ad9de3e46.
+# Build from a pinned CodexCredits Android parity commit (includes Kotlin import fix).
 # Release build uses original cached signing key, never Tauri-generated debug key.
 name: CodexCredits Android in-place upgrade APK
 on:
@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ChrisTorng/CodexCredits
-          ref: android-parity
+          ref: c5fb3488707ee1e47b0cf6af95f37d5b5c799925
           path: codexcredits
       - uses: actions/setup-node@v4
         with:
