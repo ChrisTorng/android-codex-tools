@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ChrisTorng/CodexCredits
-          ref: c5fb3488707ee1e47b0cf6af95f37d5b5c799925
+          ref: e4df834fa1914675f69ec7c0d484b76686580f43
           path: codexcredits
       - uses: actions/setup-node@v4
         with:
@@ -96,6 +96,7 @@ jobs:
       - name: Publish directly downloadable APK
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ChrisTorng/android-codex-tools
         run: |
           TAG=codexcredits-android-v2.0.0-preview
           NOTES="Android replacement build of ChrisTorng/CodexCredits. Same package and original signing identity. Preserves SharedPreferences and Android Keystore. ARM64 preview; verify critical schedules on a physical device."
