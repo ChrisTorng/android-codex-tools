@@ -3,6 +3,9 @@ name: Publish direct Android APK download
 # GitHub Release asset links can hang in Android's embedded browser after reaching
 # 100%. Keep a no-redirect, raw.githubusercontent.com mirror on a separate branch.
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/direct-apk-download.yml']
   release:
     types: [published]
   workflow_dispatch:
@@ -29,7 +32,7 @@ jobs:
       - name: Download and verify official signed APK
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag || 'codexcredits-android-v2.0.8-release' }}
         run: |
           set -euo pipefail
           case "$TAG" in
