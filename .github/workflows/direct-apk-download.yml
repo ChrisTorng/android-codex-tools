@@ -1,0 +1,73 @@
+name: Publish direct Android APK download
+
+# GitHub Release asset links can hang in Android's embedded browser after reaching
+# 100%. Keep a no-redirect, raw.githubusercontent.com mirror on a separate branch.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing signed CodexCredits Android Release tag"
+        required: true
+        default: "codexcredits-android-v2.0.8-release"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-direct-apk
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Download and verify official signed APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            codexcredits-android-v*-release) ;;
+            *) echo "::error::Unsupported release tag: $TAG"; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/direct-apk"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" --pattern 'CodexCredits-Android-v*-arm64.apk' --dir "$RUNNER_TEMP/direct-apk"
+          APK=$(find "$RUNNER_TEMP/direct-apk" -maxdepth 1 -type f -name 'CodexCredits-Android-v*-arm64.apk' -print -quit)
+          test -n "$APK"
+          NAME=$(basename "$APK")
+          EXPECTED=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" | jq -r --arg name "$NAME" '.assets[] | select(.name == $name) | .digest')
+          ACTUAL="sha256:$(sha256sum "$APK" | cut -d' ' -f1)"
+          test -n "$EXPECTED" && test "$EXPECTED" != null
+          test "$EXPECTED" = "$ACTUAL" || { echo "::error::SHA-256 mismatch"; exit 1; }
+          unzip -tq "$APK" >/dev/null
+          cp "$APK" "$RUNNER_TEMP/CodexCredits-Android.apk"
+          printf '%s\n%s\n' "$TAG" "$ACTUAL" > "$RUNNER_TEMP/VERSION.txt"
+          echo "Verified: $NAME ($(wc -c < "$APK") bytes; $ACTUAL)"
+      - name: Publish APK to dedicated raw download branch
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code --heads origin apk-download >/dev/null; then
+            git fetch origin apk-download
+            git checkout -B apk-download FETCH_HEAD
+          else
+            git checkout --orphan apk-download
+            git rm -rf . >/dev/null
+          fi
+          cp "$RUNNER_TEMP/CodexCredits-Android.apk" CodexCredits-Android.apk
+          cp "$RUNNER_TEMP/VERSION.txt" VERSION.txt
+          git add CodexCredits-Android.apk VERSION.txt
+          if git diff --cached --quiet; then
+            echo 'Direct-download branch already up to date.'
+          else
+            git commit -m 'release(android): mirror verified signed APK for direct download'
+            git push origin HEAD:apk-download
+          fi
+          echo 'Direct URL: https://raw.githubusercontent.com/ChrisTorng/android-codex-tools/apk-download/CodexCredits-Android.apk'
