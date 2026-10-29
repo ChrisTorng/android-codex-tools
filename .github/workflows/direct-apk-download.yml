@@ -13,7 +13,7 @@ on:
       tag:
         description: "Existing signed CodexCredits Android Release tag"
         required: true
-        default: "codexcredits-android-v2.0.8-release"
+        default: "codexcredits-android-v2.0.9-release"
 
 permissions:
   contents: write
@@ -32,7 +32,7 @@ jobs:
       - name: Download and verify official signed APK
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name || inputs.tag || 'codexcredits-android-v2.0.8-release' }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag || 'codexcredits-android-v2.0.9-release' }}
         run: |
           set -euo pipefail
           case "$TAG" in
