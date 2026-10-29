@@ -1,0 +1,121 @@
+# Production Release APK built from CodexCredits, signed with the original Android identity.
+# This workflow changes no code in the original Android application repository.
+name: CodexCredits Android v2.0.11 signed Release APK
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/codexcredits-v211-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  signed-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 7055017ca542b66db8716b458ab8534aa563ebc8
+          path: legacy
+      - uses: actions/checkout@v4
+        with:
+          repository: ChrisTorng/CodexCredits
+          ref: faadcfb16f56554b3301cfe858c219fd49bc781f
+          path: codexcredits
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Install Android SDK and NDK
+        run: |
+          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-codex-tools-debug-keystore-v1
+      - name: Require original Android signing identity
+        run: |
+          set -euo pipefail
+          EXPECTED=177f5e3fed59854e4203dafe13490a75c2438b37731ff0e7af7acbfe45a8e679
+          test -f "$HOME/.android/debug.keystore" || { echo 'Original signing key unavailable; aborting.'; exit 1; }
+          ACTUAL=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey |
+            grep -m1 'SHA256:' | sed -E 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          test "$ACTUAL" = "$EXPECTED" || { echo 'Signature mismatch; refusing incompatible update.'; exit 1; }
+      - name: Generate PNG app icons
+        working-directory: codexcredits
+        run: |
+          python3 -m pip install --quiet Pillow
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          p=Path("src-tauri/icons")
+          img=Image.open(p/"icon.ico").convert("RGBA")
+          for name,size in (("icon.png",512),("128x128.png",128),("32x32.png",32)):
+              img.resize((size,size),Image.Resampling.LANCZOS).save(p/name)
+          PY
+      - run: npm install
+        working-directory: codexcredits
+      - name: Prevent overlapping ideal quota lines (regression tests)
+        working-directory: codexcredits
+        run: npm run test:charts
+      - name: Verify Android Rust entry point
+        working-directory: codexcredits
+        run: python3 mobile/android/check_entrypoint.py
+      - name: Initialize Tauri Android host
+        working-directory: codexcredits
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          npm run tauri -- android init --ci --skip-targets-install --config src-tauri/tauri.android.conf.json
+      - name: Add legacy Android background implementation
+        working-directory: codexcredits
+        run: python3 mobile/android/prepare.py --legacy ../legacy --release-keystore "$HOME/.android/debug.keystore"
+      - name: Compile optimized signed ARM64 Release APK
+        working-directory: codexcredits
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          npm run tauri -- android build --apk --target aarch64 --config src-tauri/tauri.android.conf.json
+      - name: Verify optimized Dex retains JNI bridge methods
+        working-directory: codexcredits
+        run: |
+          set -euo pipefail
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f | head -n1)
+          test -n "$APK"
+          python3 mobile/android/check_dex_jni.py "$APK"
+      - name: Validate APK package/signature and stage direct APK
+        run: |
+          set -euo pipefail
+          EXPECTED=177f5e3fed59854e4203dafe13490a75c2438b37731ff0e7af7acbfe45a8e679
+          APK=$(find codexcredits/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f | head -n1)
+          test -n "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | grep -F "package: name='com.christorng.androidcodextools'"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$APK" |
+            grep -qi "Signer #1 certificate SHA-256 digest: $EXPECTED"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | grep -F "versionCode='2000011'"
+          mkdir -p signed
+          cp "$APK" signed/CodexCredits-Android-v2.0.11-arm64.apk
+          stat -c '%n %s bytes' signed/*.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CodexCredits-Android-v2.0.11-Signed-Release
+          path: signed/*.apk
+          if-no-files-found: error
+      - name: Publish directly downloadable APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ChrisTorng/android-codex-tools
+        run: |
+          TAG=codexcredits-android-v2.0.11-release
+          NOTES="CodexCredits Android v2.0.11. Prevent phantom 5h history windows inferred from stable idle reset_at without quota consumption. Combine events and meaningful sampling changes in time order, show recent 48h entries first, and collapse old events and verbose sampling with opt-in detail. Keeps original scheduler, Android signing identity and user data unchanged."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" signed/*.apk --clobber
+          else
+            gh release create "$TAG" signed/*.apk --title "CodexCredits Android v2.0.11 Release" --notes "$NOTES" --latest
+          fi
