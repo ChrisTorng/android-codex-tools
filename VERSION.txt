@@ -1,2 +1,2 @@
-codexcredits-android-v2.0.9-release
-sha256:57ee2732ffa6564f1b274679c5cdc9045022326bc82543492b2f01e9ffceb173
+codexcredits-android-v2.0.10-release
+sha256:2d7d9df1c5061d5d3791c084182478e259938cd6cd06ea08840a4904c2de5303
