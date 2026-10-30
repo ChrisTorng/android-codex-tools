@@ -1,0 +1,63 @@
+name: One-time encrypted CodexCredits signing-key transfer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/codexcredits-transfer-signing-key.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  encrypt-signing-key:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-codex-tools-debug-keystore-v1
+          fail-on-cache-miss: true
+      - name: Verify cached original Android signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$HOME/.android/debug.keystore"
+          EXPECTED=177f5e3fed59854e4203dafe13490a75c2438b37731ff0e7af7acbfe45a8e679
+          ACTUAL=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey |
+            grep -m1 'SHA256:' | sed -E 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          test "$ACTUAL" = "$EXPECTED" || { echo "::error::Unexpected certificate; refusing export"; exit 1; }
+          echo "Original signer verified: $ACTUAL"
+      - name: Install age for SSH-Ed25519 public-key encryption
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          GOBIN="$RUNNER_TEMP/bin" go install filippo.io/age/cmd/age@v1.2.1
+          "$RUNNER_TEMP/bin/age" --version
+      - name: Encrypt original keystore for recipient only
+        shell: bash
+        env:
+          RECIPIENT_SSH_PUBLIC_KEY: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEMPovscgiNyG1cuPrLUbUpdjmDRdHsIEeZK0XOQWLtE christorng@ChrisRtx'
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/codexcredits-key-transfer"
+          printf '%s\n' "$RECIPIENT_SSH_PUBLIC_KEY" > "$RUNNER_TEMP/codexcredits-key-transfer/recipient.pub"
+          ssh-keygen -lf "$RUNNER_TEMP/codexcredits-key-transfer/recipient.pub" -E sha256
+          "$RUNNER_TEMP/bin/age" -R "$RUNNER_TEMP/codexcredits-key-transfer/recipient.pub" \
+            -o "$RUNNER_TEMP/codexcredits-key-transfer/CodexCredits-original-android-signing.age" \
+            "$HOME/.android/debug.keystore"
+          test -s "$RUNNER_TEMP/codexcredits-key-transfer/CodexCredits-original-android-signing.age"
+          test "$(head -c 21 "$RUNNER_TEMP/codexcredits-key-transfer/CodexCredits-original-android-signing.age")" = "age-encryption.org/v1"
+          echo "Encrypted keystore produced; only .age ciphertext will be uploaded."
+      - name: Upload encrypted file only
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexCredits-signing-key-encrypted-ssh-ed25519
+          path: ${{ runner.temp }}/codexcredits-key-transfer/CodexCredits-original-android-signing.age
+          if-no-files-found: error
+          retention-days: 3
